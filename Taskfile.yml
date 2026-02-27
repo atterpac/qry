@@ -1,0 +1,28 @@
+version: "3"
+
+vars:
+  COMPOSE_FILE: testdata/docker-compose.yml
+
+tasks:
+  testdb-up:
+    desc: Start Postgres and MySQL test containers
+    cmds:
+      - docker compose -f {{.COMPOSE_FILE}} up -d --wait
+
+  testdb-down:
+    desc: Stop and remove test containers and volumes
+    cmds:
+      - docker compose -f {{.COMPOSE_FILE}} down -v
+
+  testdb-seed:
+    desc: Seed all test databases (Postgres, MySQL, SQLite)
+    cmds:
+      - go run ./testdata/seed/
+
+  testdb-reset:
+    desc: Tear down, restart, and re-seed all test databases
+    cmds:
+      - task: testdb-down
+      - task: testdb-up
+      - sleep 3
+      - task: testdb-seed

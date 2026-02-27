@@ -1,0 +1,22 @@
+# qry test config — profiles for seeded demo databases
+# Start containers: task testdb-up
+# Seed data:        task testdb-seed
+
+theme: tokyonight-night
+active_profile: postgres
+
+profiles:
+  # Postgres on non-standard port to avoid conflicts
+  postgres:
+    engine: postgres
+    dsn: "postgres://qrytest:qrytest@localhost:15432/qrytest"
+
+  # MySQL on non-standard port to avoid conflicts
+  mysql:
+    engine: mysql
+    dsn: "qrytest:qrytest@tcp(localhost:13306)/qrytest?parseTime=true"
+
+  # SQLite file created by the seeder
+  sqlite:
+    engine: sqlite
+    path: "testdata/test.db"

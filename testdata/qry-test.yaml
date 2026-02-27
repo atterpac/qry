@@ -1,0 +1,24 @@
+theme: tokyonight-night
+active_profile: test-pg
+
+profiles:
+  test-pg:
+    engine: postgres
+    dsn: "postgres://qrytest:qrytest@localhost:15432/qrytest"
+    saved_queries:
+      - name: "active users with orders"
+        query: "SELECT u.username, COUNT(o.id) AS order_count FROM users u JOIN orders o ON o.user_id = u.id WHERE u.is_active = true GROUP BY u.username ORDER BY order_count DESC"
+
+  test-mysql:
+    engine: mysql
+    dsn: "qrytest:qrytest@tcp(localhost:13306)/qrytest?parseTime=true"
+    saved_queries:
+      - name: "top products by revenue"
+        query: "SELECT p.name, SUM(oi.quantity * oi.unit_price) AS revenue FROM products p JOIN order_items oi ON oi.product_id = p.id GROUP BY p.name ORDER BY revenue DESC"
+
+  test-sqlite:
+    engine: sqlite
+    path: "testdata/test.db"
+    saved_queries:
+      - name: "orders summary by status"
+        query: "SELECT status, COUNT(*) AS cnt, ROUND(SUM(total),2) AS total FROM orders GROUP BY status ORDER BY cnt DESC"
