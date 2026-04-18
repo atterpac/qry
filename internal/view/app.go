@@ -21,6 +21,11 @@ import (
 	"github.com/atterpac/qry/internal/engine"
 )
 
+// PipeableView is implemented by views that can provide data for shell piping.
+type PipeableView interface {
+	BuildPipeData(format string) string
+}
+
 // CommandContextProvider is implemented by views that provide context for command expansion.
 type CommandContextProvider interface {
 	CommandContext() CommandViewContext
@@ -52,6 +57,8 @@ type App struct {
 	history       *QueryHistoryStore
 	gridEditing   bool // true when a DataGrid is in edit mode
 	gridSearching bool // true when a table search filter is active
+	textEditing   bool // true when a TextArea (e.g. query editor) has focus
+	txMode        bool // true when an explicit transaction is active
 
 	// Jump list for Ctrl+O / Ctrl+I navigation
 	jumpList   []JumpEntry
@@ -114,6 +121,58 @@ func (a *App) buildApp() {
 	})
 }
 
+// showTxQuitConfirm shows a dialog when quitting with an active transaction.
+func (a *App) showTxQuitConfirm() {
+	list := components.NewList().
+		SetHighlightFullLine(true).
+		SetWrapAround(true)
+
+	list.AddItem("Commit and quit")
+	list.AddItem("Rollback and quit")
+	list.AddItem("Cancel")
+
+	list.SetOnSelect(func(index int, _ components.ListItem) {
+		a.app.Pages().Pop()
+		tp, ok := a.Provider().(engine.TransactionalProvider)
+		if !ok {
+			a.app.Stop()
+			return
+		}
+		ctx := context.Background()
+		switch index {
+		case 0:
+			tp.CommitTx(ctx)
+			a.txMode = false
+			a.app.Stop()
+		case 1:
+			tp.RollbackTx(ctx)
+			a.txMode = false
+			a.app.Stop()
+		case 2:
+			// cancel — do nothing
+		}
+	})
+
+	modal := components.NewModal(components.ModalConfig{
+		Title:    "Active Transaction",
+		Width:    40,
+		Height:   8,
+		Backdrop: true,
+	}).SetContent(list).
+		SetHints([]components.KeyHint{
+			{Key: "j/k", Description: "Navigate"},
+			{Key: "Enter", Description: "Select"},
+		})
+
+	a.app.Pages().Push(modal)
+}
+
+// updateTxStatus adds or removes the TX indicator from the status bar.
+func (a *App) updateTxStatus() {
+	// Rebuild profile status which also handles TX indicator
+	a.updateProfileStatus(a.activeProfile.Get())
+}
+
 // updateProfileStatus refreshes the status bar sections for the given profile name.
 // Safe to call from any goroutine context (does not trigger QueueUpdateDraw).
 func (a *App) updateProfileStatus(profile string) {
@@ -140,6 +199,14 @@ func (a *App) updateProfileStatus(profile string) {
 			ColorFunc: theme.Get().Fg,
 		})
 	}
+
+	// TX indicator
+	if a.txMode {
+		a.statusBar.AddSection(layout.StatusSection{
+			Text:      "TX",
+			ColorFunc: theme.Get().Warning,
+		})
+	}
 }
 
 func (a *App) setup() {
@@ -149,11 +216,26 @@ func (a *App) setup() {
 			return event
 		}
 
+		// When editing a grid cell, pass all events through to the DataGrid
+		// which handles text input, Escape (cancel), and Enter (confirm).
+		if a.gridEditing {
+			return event
+		}
+
+		// Skip rune-based shortcuts when editing text (query editor)
+		if a.textEditing && event.Key() == tcell.KeyRune {
+			return event
+		}
+
 		isModal := a.app.Pages().CurrentIsModal()
 
 		switch {
 		case event.Rune() == 'q' && !isModal:
 			if !a.app.Pages().CanPop() {
+				if a.txMode {
+					a.showTxQuitConfirm()
+					return nil
+				}
 				a.app.Stop()
 				return nil
 			}
@@ -390,6 +472,16 @@ func (a *App) NavigateToQueryHistory() {
 	a.app.Pages().Push(view)
 }
 
+func (a *App) NavigateToSchemaDiff(targetProfile, schema string) {
+	view := NewSchemaDiff(a, targetProfile, schema)
+	a.app.Pages().Push(view)
+}
+
+func (a *App) NavigateToExplainView(sql string) {
+	view := NewExplainView(a, sql)
+	a.app.Pages().Push(view)
+}
+
 func (a *App) NavigateToERD(schema string) {
 	view := NewErdView(a, schema)
 	a.app.Pages().Push(view)
@@ -470,7 +562,10 @@ func (a *App) showCommandBar() {
 			"queries", "history",
 			"run", "table",
 			"sort", "count", "describe",
-			"erd", "profile", "quit", "q",
+			"erd", "profile", "pipe",
+			"begin", "commit", "rollback", "discard", "dry-run",
+			"explain", "watch", "diff",
+			"quit", "q",
 		}
 		userCmds := a.cfg.ListCommandNames(activeProfile)
 		all := append(builtins, userCmds...)
@@ -593,9 +688,175 @@ func (a *App) handleCommand(text string) {
 		}
 		td.showSchemaOverlay()
 
+	case "begin":
+		tp, ok := a.Provider().(engine.TransactionalProvider)
+		if !ok {
+			a.ShowWarning("Current engine does not support transactions")
+			return
+		}
+		if tp.InTransaction() {
+			a.ShowWarning("Transaction already active")
+			return
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := tp.BeginTx(ctx); err != nil {
+			a.ShowError(fmt.Sprintf("Begin failed: %v", err))
+			return
+		}
+		a.txMode = true
+		a.updateTxStatus()
+		a.ShowSuccess("Transaction started")
+
+	case "commit":
+		tp, ok := a.Provider().(engine.TransactionalProvider)
+		if !ok || !tp.InTransaction() {
+			a.ShowWarning("No active transaction")
+			return
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := tp.CommitTx(ctx); err != nil {
+			a.ShowError(fmt.Sprintf("Commit failed: %v", err))
+			return
+		}
+		a.txMode = false
+		a.updateTxStatus()
+		a.ShowSuccess("Transaction committed")
+		if td, ok := a.currentTableData(); ok {
+			td.discardChanges()
+		}
+
+	case "rollback":
+		tp, ok := a.Provider().(engine.TransactionalProvider)
+		if !ok || !tp.InTransaction() {
+			a.ShowWarning("No active transaction (use :discard to clear pending edits)")
+			return
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := tp.RollbackTx(ctx); err != nil {
+			a.ShowError(fmt.Sprintf("Rollback failed: %v", err))
+			return
+		}
+		a.txMode = false
+		a.updateTxStatus()
+		a.ShowSuccess("Transaction rolled back")
+		if td, ok := a.currentTableData(); ok {
+			td.discardChanges()
+		}
+
+	case "discard":
+		td, ok := a.currentTableData()
+		if !ok {
+			a.ShowWarning("Not viewing a table")
+			return
+		}
+		td.discardChanges()
+
+	case "dry-run":
+		a.ShowInfo("Dry-run: wrapping pending changes in BEGIN/ROLLBACK")
+		td, ok := a.currentTableData()
+		if !ok {
+			a.ShowWarning("Not viewing a table")
+			return
+		}
+		td.dryRun()
+
+	case "diff":
+		if len(args) < 2 {
+			a.ShowWarning("Usage: diff schema <profile> [schema]")
+			return
+		}
+		subCmd := args[0]
+		switch subCmd {
+		case "schema":
+			targetProfile := args[1]
+			schema := ""
+			if len(args) > 2 {
+				schema = args[2]
+			}
+			a.NavigateToSchemaDiff(targetProfile, schema)
+		default:
+			a.ShowWarning("Usage: diff schema <profile> [schema]")
+		}
+
+	case "watch":
+		if c := a.app.Pages().Current(); c != nil {
+			if qe, ok := c.(*QueryEditor); ok {
+				if len(args) > 0 && args[0] == "stop" {
+					qe.stopWatch()
+					return
+				}
+				if len(args) == 0 {
+					a.ShowWarning("Usage: watch <duration> (e.g. 5s, 1m) or watch stop")
+					return
+				}
+				dur, err := time.ParseDuration(args[0])
+				if err != nil {
+					a.ShowWarning(fmt.Sprintf("Invalid duration: %v", err))
+					return
+				}
+				qe.startWatch(dur)
+				return
+			}
+		}
+		a.ShowWarning("Watch mode is only available in the query editor")
+
+	case "explain":
+		if len(args) == 0 {
+			// Try to get SQL from current query editor
+			if c := a.app.Pages().Current(); c != nil {
+				if qe, ok := c.(*QueryEditor); ok && qe.lastSQL != "" {
+					a.NavigateToExplainView(qe.lastSQL)
+					return
+				}
+			}
+			a.ShowWarning("Usage: explain <sql>")
+			return
+		}
+		a.NavigateToExplainView(strings.Join(args, " "))
+
+	case "pipe":
+		if len(args) == 0 {
+			a.ShowWarning("Usage: pipe [--format csv|json|tsv] <shell command>")
+			return
+		}
+		format := "json"
+		shellArgs := args
+		if len(shellArgs) >= 2 && shellArgs[0] == "--format" {
+			format = shellArgs[1]
+			shellArgs = shellArgs[2:]
+		}
+		if len(shellArgs) == 0 {
+			a.ShowWarning("Usage: pipe [--format csv|json|tsv] <shell command>")
+			return
+		}
+		pv := a.currentPipeableView()
+		if pv == nil {
+			a.ShowWarning("Current view has no data to pipe")
+			return
+		}
+		data := pv.BuildPipeData(format)
+		if data == "" {
+			a.ShowWarning("No data to pipe")
+			return
+		}
+		a.executePipe(data, strings.Join(shellArgs, " "))
+
 	default:
 		a.ShowWarning(fmt.Sprintf("Unknown command: %s", cmd))
 	}
+}
+
+// currentPipeableView returns the current view if it implements PipeableView.
+func (a *App) currentPipeableView() PipeableView {
+	if c := a.app.Pages().Current(); c != nil {
+		if pv, ok := c.(PipeableView); ok {
+			return pv
+		}
+	}
+	return nil
 }
 
 // currentTableData returns the active TableData view if one is focused.
@@ -725,6 +986,15 @@ func (a *App) showHelp() {
   sort <col> Sort by column
   count      Count rows
   describe   Show table schema
+  pipe       Pipe data to shell command
+  begin      Start transaction
+  commit     Commit transaction
+  rollback   Rollback transaction
+  discard    Discard pending edits/inserts/deletes
+  dry-run    Preview changes (rollback)
+  explain    Query plan visualization
+  watch <d>  Re-run query on interval
+  diff       Compare schemas between profiles
   profile    Switch profile
   quit       Exit`
 

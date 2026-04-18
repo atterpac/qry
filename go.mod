@@ -49,4 +49,4 @@ require (
 	modernc.org/memory v1.11.0 // indirect
 )
 
-// replace github.com/atterpac/jig => ../jig
+replace github.com/atterpac/jig => ../jig

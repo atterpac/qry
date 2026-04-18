@@ -13,6 +13,20 @@ services:
       timeout: 5s
       retries: 15
 
+  postgres-prod:
+    image: postgres:16-alpine
+    ports:
+      - "15433:5432"
+    environment:
+      POSTGRES_USER: qrytest
+      POSTGRES_PASSWORD: qrytest
+      POSTGRES_DB: qrytest_prod
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U qrytest"]
+      interval: 2s
+      timeout: 5s
+      retries: 15
+
   mysql:
     image: mysql:8.0
     ports:

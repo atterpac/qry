@@ -9,6 +9,13 @@ profiles:
       - name: "active users with orders"
         query: "SELECT u.username, COUNT(o.id) AS order_count FROM users u JOIN orders o ON o.user_id = u.id WHERE u.is_active = true GROUP BY u.username ORDER BY order_count DESC"
 
+  test-pg-prod:
+    engine: postgres
+    dsn: "postgres://qrytest:qrytest@localhost:15433/qrytest_prod"
+    saved_queries:
+      - name: "recent reviews"
+        query: "SELECT r.rating, r.body, u.username, p.name AS product FROM reviews r JOIN users u ON u.id = r.user_id JOIN products p ON p.id = r.product_id ORDER BY r.created_at DESC LIMIT 20"
+
   test-mysql:
     engine: mysql
     dsn: "qrytest:qrytest@tcp(localhost:13306)/qrytest?parseTime=true"

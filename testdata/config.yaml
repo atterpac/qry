@@ -11,6 +11,11 @@ profiles:
     engine: postgres
     dsn: "postgres://qrytest:qrytest@localhost:15432/qrytest"
 
+  # Postgres "prod" — diverged schema for diff testing
+  postgres-prod:
+    engine: postgres
+    dsn: "postgres://qrytest:qrytest@localhost:15433/qrytest_prod"
+
   # MySQL on non-standard port to avoid conflicts
   mysql:
     engine: mysql

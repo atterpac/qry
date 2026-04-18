@@ -20,6 +20,7 @@ type SQLiteProvider struct {
 	db        *sql.DB
 	path      string
 	connected bool
+	tx        *sql.Tx
 }
 
 func (p *SQLiteProvider) Connect(ctx context.Context, cfg config.ConnectionConfig) error {
@@ -213,8 +214,59 @@ func (p *SQLiteProvider) ExecuteQuery(ctx context.Context, query string) (*Query
 	return p.executeExec(ctx, query, start)
 }
 
+// sqlDB returns the transaction if active, otherwise the db.
+// Must be called while holding at least an RLock.
+func (p *SQLiteProvider) sqlDB() sqlQueryer {
+	if p.tx != nil {
+		return p.tx
+	}
+	return p.db
+}
+
+func (p *SQLiteProvider) BeginTx(ctx context.Context) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.tx != nil {
+		return fmt.Errorf("transaction already active")
+	}
+	tx, err := p.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	p.tx = tx
+	return nil
+}
+
+func (p *SQLiteProvider) CommitTx(ctx context.Context) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.tx == nil {
+		return fmt.Errorf("no active transaction")
+	}
+	err := p.tx.Commit()
+	p.tx = nil
+	return err
+}
+
+func (p *SQLiteProvider) RollbackTx(ctx context.Context) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.tx == nil {
+		return fmt.Errorf("no active transaction")
+	}
+	err := p.tx.Rollback()
+	p.tx = nil
+	return err
+}
+
+func (p *SQLiteProvider) InTransaction() bool {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.tx != nil
+}
+
 func (p *SQLiteProvider) executeSelect(ctx context.Context, query string, start time.Time) (*QueryResult, error) {
-	rows, err := p.db.QueryContext(ctx, query)
+	rows, err := p.sqlDB().QueryContext(ctx, query)
 	if err != nil {
 		return nil, err
 	}
@@ -259,7 +311,7 @@ func (p *SQLiteProvider) executeExec(ctx context.Context, query string, start ti
 }
 
 func (p *SQLiteProvider) executeExecArgs(ctx context.Context, query string, start time.Time, args []any) (*QueryResult, error) {
-	result, err := p.db.ExecContext(ctx, query, args...)
+	result, err := p.sqlDB().ExecContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}

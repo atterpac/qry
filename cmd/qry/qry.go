@@ -15,6 +15,7 @@ import (
 
 	"github.com/atterpac/qry/internal/config"
 	"github.com/atterpac/qry/internal/engine"
+	"github.com/atterpac/qry/internal/headless"
 	"github.com/atterpac/qry/internal/view"
 )
 
@@ -38,6 +39,10 @@ func main() {
 		flagEngine  string
 		flagTheme   string
 		flagVersion bool
+		flagExec    string
+		flagScript  string
+		flagFormat  string
+		flagQuiet   bool
 	)
 
 	flag.StringVar(&flagProfile, "profile", "", "connection profile name")
@@ -46,6 +51,10 @@ func main() {
 	flag.StringVar(&flagEngine, "engine", "", "database engine: postgres, sqlite, mysql, surrealdb")
 	flag.StringVar(&flagTheme, "theme", "", "color theme (overrides config)")
 	flag.BoolVar(&flagVersion, "version", false, "print version and exit")
+	flag.StringVar(&flagExec, "exec", "", "execute SQL and exit (headless mode)")
+	flag.StringVar(&flagScript, "script", "", "execute SQL file and exit (headless mode)")
+	flag.StringVar(&flagFormat, "format", "table", "output format: csv, json, tsv, table, sql (headless mode)")
+	flag.BoolVar(&flagQuiet, "quiet", false, "suppress non-data output (headless mode)")
 	flag.Parse()
 
 	if flagVersion {
@@ -103,6 +112,24 @@ func main() {
 
 	// Determine if CLI flags override the connection
 	hasCLIOverride := flagDSN != "" || flagPath != "" || flagEngine != "" || flagProfile != ""
+
+	// Detect headless mode: --exec, --script, or piped stdin
+	isHeadless := flagExec != "" || flagScript != ""
+	if !isHeadless {
+		if info, err := os.Stdin.Stat(); err == nil {
+			isHeadless = (info.Mode() & os.ModeCharDevice) == 0
+		}
+	}
+
+	if isHeadless {
+		code := headless.Run(cfg, connCfg, headless.Options{
+			Exec:   flagExec,
+			Script: flagScript,
+			Format: flagFormat,
+			Quiet:  flagQuiet,
+		})
+		os.Exit(code)
+	}
 
 	var provider engine.Provider
 	if !cfg.HasUserProfiles() && !hasCLIOverride {

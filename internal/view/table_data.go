@@ -45,8 +45,9 @@ type TableData struct {
 	resultCols   []string
 	offset       int
 	limit        int
-	searchFilter string
-	searchActive bool
+	searchFilter  string
+	searchActive  bool
+	filterFromNav bool // true when filter was set by FK navigation (gd), not user search
 	statusBar    *tview.TextView
 	emptyState     *tview.TextView
 	fkInfo         []engine.ForeignKeyInfo
@@ -170,7 +171,13 @@ func NewTableData(app *App, schema, table string) *TableData {
 	})
 
 	t.grid.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
-		if event.Key() == tcell.KeyEscape && t.searchActive {
+		// When grid is in edit mode, skip all table keybinds so the DataGrid
+		// can handle text input, Escape (cancel), and Enter (confirm).
+		if app.gridEditing {
+			return event
+		}
+
+		if event.Key() == tcell.KeyEscape && t.searchActive && !t.filterFromNav {
 			if t.searchCancel != nil {
 				t.searchCancel()
 			}
@@ -602,10 +609,12 @@ func (t *TableData) showSearchBar() {
 }
 
 // SetFilter configures a pre-applied search filter for this view.
+// When used for FK navigation, the filter is treated as part of the navigation
+// so Escape pops back rather than clearing the filter.
 func (t *TableData) SetFilter(filter string) {
 	t.searchFilter = filter
 	t.searchActive = true
-	t.app.gridSearching = true
+	t.filterFromNav = true
 }
 
 func (t *TableData) followFK() {
@@ -922,21 +931,54 @@ func (t *TableData) executeChanges() {
 		return
 	}
 
-	// Execute each statement
+	// Execute all statements in a transaction for atomicity.
+	// If the user already started one with :begin, use that instead.
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
+
+		// Auto-wrap in a transaction if the provider supports it and
+		// no user-managed transaction is active.
+		autoTx := false
+		if tp, ok := provider.(engine.TransactionalProvider); ok && !tp.InTransaction() {
+			if err := tp.BeginTx(ctx); err != nil {
+				t.app.QueueUpdateDraw(func() {
+					t.app.ShowError(fmt.Sprintf("Begin transaction failed: %v", err))
+				})
+				return
+			}
+			autoTx = true
+		}
 
 		var executed int
 		for i, sql := range sqlStmts {
 			_, err := provider.ExecuteArgs(ctx, sql, allArgs[i])
 			if err != nil {
+				// Rollback the auto-transaction on failure
+				if autoTx {
+					if tp, ok := provider.(engine.TransactionalProvider); ok {
+						tp.RollbackTx(ctx)
+					}
+				}
 				t.app.QueueUpdateDraw(func() {
-					t.app.ShowError(fmt.Sprintf("Execute failed (%d/%d): %v", i+1, len(sqlStmts), err))
+					t.app.ShowError(fmt.Sprintf("Execute failed (%d/%d), rolled back: %v", i+1, len(sqlStmts), err))
 				})
 				return
 			}
 			executed++
+		}
+
+		// Auto-commit if we started the transaction ourselves.
+		// If the user started it with :begin, leave it open for them to :commit/:rollback.
+		if autoTx {
+			if tp, ok := provider.(engine.TransactionalProvider); ok {
+				if err := tp.CommitTx(ctx); err != nil {
+					t.app.QueueUpdateDraw(func() {
+						t.app.ShowError(fmt.Sprintf("Commit failed: %v", err))
+					})
+					return
+				}
+			}
 		}
 
 		t.app.QueueUpdateDraw(func() {
@@ -949,6 +991,171 @@ func (t *TableData) executeChanges() {
 			t.loadData()
 		})
 	}()
+}
+
+// dryRun executes pending changes inside a BEGIN/ROLLBACK to preview effects
+// without persisting them.
+func (t *TableData) dryRun() {
+	provider := t.app.Provider()
+	if provider == nil {
+		return
+	}
+
+	cs := t.grid.GetChangeset()
+	hasEdits := cs != nil && cs.HasChanges()
+	hasInserts := len(t.pendingInserts) > 0
+	hasDeletes := len(t.pendingDeletes) > 0
+
+	if !hasEdits && !hasInserts && !hasDeletes {
+		t.app.ShowInfo("No changes for dry-run")
+		return
+	}
+
+	tp, ok := provider.(engine.TransactionalProvider)
+	if !ok {
+		t.app.ShowWarning("Current engine does not support dry-run")
+		return
+	}
+
+	if tp.InTransaction() {
+		t.app.ShowWarning("Cannot dry-run while a transaction is active")
+		return
+	}
+
+	// Build statements (reuse submitChangeset logic for preview)
+	deletedRows := make(map[int]bool)
+	for _, pd := range t.pendingDeletes {
+		deletedRows[pd.RowIndex] = true
+	}
+
+	var previewStatements []string
+	if hasEdits {
+		dirtyRows := cs.DirtyRows()
+		for rowIdx := range dirtyRows {
+			if deletedRows[rowIdx] {
+				continue
+			}
+			pkVals := make(map[string]string)
+			for _, pkCol := range t.pkCols {
+				for colIdx, colName := range t.resultCols {
+					if colName == pkCol {
+						cell := t.source.Cell(rowIdx, colIdx)
+						pkVals[pkCol] = cell.Value
+						break
+					}
+				}
+			}
+			var changes []engine.CellChange
+			for _, change := range cs.Changes() {
+				if change.Position.Row == rowIdx && change.Position.Col < len(t.resultCols) {
+					changes = append(changes, engine.CellChange{
+						Column:   t.resultCols[change.Position.Col],
+						OldValue: change.OldValue,
+						NewValue: change.NewValue,
+					})
+				}
+			}
+			if len(changes) > 0 {
+				sql, args, err := provider.BuildUpdate(t.schema, t.table, t.pkCols, changes, pkVals)
+				if err != nil {
+					t.app.ShowError(fmt.Sprintf("Build SQL failed: %v", err))
+					return
+				}
+				previewStatements = append(previewStatements, interpolateSQL(sql, args))
+			}
+		}
+	}
+	for _, pi := range t.pendingInserts {
+		sql, args, err := provider.BuildInsert(t.schema, t.table, pi.Columns, pi.Values)
+		if err != nil {
+			t.app.ShowError(fmt.Sprintf("Build INSERT failed: %v", err))
+			return
+		}
+		previewStatements = append(previewStatements, interpolateSQL(sql, args))
+	}
+	for _, pd := range t.pendingDeletes {
+		sql, args, err := provider.BuildDelete(t.schema, t.table, t.pkCols, pd.PKValues)
+		if err != nil {
+			t.app.ShowError(fmt.Sprintf("Build DELETE failed: %v", err))
+			return
+		}
+		previewStatements = append(previewStatements, interpolateSQL(sql, args))
+	}
+
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+
+		if err := tp.BeginTx(ctx); err != nil {
+			t.app.QueueUpdateDraw(func() {
+				t.app.ShowError(fmt.Sprintf("Dry-run begin failed: %v", err))
+			})
+			return
+		}
+
+		var results []string
+		for _, stmt := range previewStatements {
+			result, err := provider.ExecuteQuery(ctx, stmt)
+			if err != nil {
+				results = append(results, fmt.Sprintf("ERROR: %v", err))
+			} else if result.Message != "" {
+				results = append(results, result.Message)
+			} else {
+				results = append(results, "OK")
+			}
+		}
+
+		tp.RollbackTx(ctx)
+
+		t.app.QueueUpdateDraw(func() {
+			summary := fmt.Sprintf("Dry-run results (%d statements, all rolled back):\n\n", len(previewStatements))
+			for i, r := range results {
+				summary += fmt.Sprintf("%d. %s → %s\n", i+1, previewStatements[i], r)
+			}
+			t.app.ShowInfo("Dry-run complete — all changes rolled back")
+
+			tv := tview.NewTextView()
+			tv.SetDynamicColors(true)
+			tv.SetWordWrap(true)
+			tv.SetText(summary)
+
+			modal := components.NewModal(components.ModalConfig{
+				Title:  "Dry-Run Results",
+				Width:  80,
+				Height: min(len(previewStatements)*2+8, 30),
+			}).SetContent(tv)
+
+			t.app.app.Pages().Push(modal)
+		})
+	}()
+}
+
+// discardChanges clears all pending edits, inserts, and deletes.
+func (t *TableData) discardChanges() {
+	cs := t.grid.GetChangeset()
+	hadChanges := false
+
+	if cs != nil && cs.HasChanges() {
+		cs.Clear()
+		hadChanges = true
+	}
+	if len(t.pendingInserts) > 0 {
+		t.pendingInserts = nil
+		hadChanges = true
+	}
+	if len(t.pendingDeletes) > 0 {
+		t.pendingDeletes = nil
+		hadChanges = true
+	}
+
+	if !hadChanges {
+		t.app.ShowInfo("No pending changes to discard")
+		return
+	}
+
+	t.updateStatusBar()
+	t.loadData()
+	t.app.ShowSuccess("All pending changes discarded")
 }
 
 // isAutoColumn returns true if the column is auto-generated (auto_increment, serial, etc).
@@ -1030,7 +1237,7 @@ func (t *TableData) showInsertFormWithValues(editableCols []engine.ColumnInfo, p
 		if !col.Nullable {
 			label += " *"
 		}
-		form.AddInputField(label, defaultVal, 40, nil, nil)
+		form.AddInputField(label, defaultVal, 0, nil, nil)
 	}
 
 	form.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
@@ -1232,6 +1439,11 @@ func (t *TableData) showExportPicker() {
 		})
 
 	t.app.app.Pages().Push(modal)
+}
+
+// BuildPipeData implements PipeableView.
+func (t *TableData) BuildPipeData(format string) string {
+	return t.buildExportData(format)
 }
 
 func (t *TableData) buildExportData(format string) string {

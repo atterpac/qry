@@ -67,6 +67,85 @@ var pgCreateStatements = []string{
 	)`,
 }
 
+// ── Postgres "Prod" DDL (diverged from dev) ──────────────────────────────────
+// Differences from dev:
+//   - users: added phone column, removed display_name, email widened to 150
+//   - products: added weight column, price widened to NUMERIC(12,2)
+//   - orders: added shipped_at timestamp
+//   - product_tags: removed entirely
+//   - reviews: new table
+
+var pgProdDropStatements = []string{
+	"DROP TABLE IF EXISTS analytics.events",
+	"DROP SCHEMA IF EXISTS analytics CASCADE",
+	"DROP TABLE IF EXISTS reviews",
+	"DROP TABLE IF EXISTS order_items",
+	"DROP TABLE IF EXISTS orders",
+	"DROP TABLE IF EXISTS products",
+	"DROP TABLE IF EXISTS tags",
+	"DROP TABLE IF EXISTS users",
+}
+
+var pgProdCreateStatements = []string{
+	`CREATE TABLE users (
+		id SERIAL PRIMARY KEY,
+		username VARCHAR(50) NOT NULL UNIQUE,
+		email VARCHAR(150) NOT NULL UNIQUE,
+		phone VARCHAR(20),
+		is_active BOOLEAN NOT NULL DEFAULT true,
+		created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+		updated_at TIMESTAMP
+	)`,
+	`CREATE TABLE products (
+		id SERIAL PRIMARY KEY,
+		name VARCHAR(100) NOT NULL,
+		category VARCHAR(50) NOT NULL,
+		price NUMERIC(12,2) NOT NULL,
+		sku VARCHAR(20) NOT NULL UNIQUE,
+		description TEXT,
+		weight NUMERIC(8,2),
+		in_stock BOOLEAN NOT NULL DEFAULT true,
+		created_at TIMESTAMP NOT NULL DEFAULT NOW()
+	)`,
+	`CREATE TABLE tags (
+		id SERIAL PRIMARY KEY,
+		name VARCHAR(50) NOT NULL UNIQUE
+	)`,
+	`CREATE TABLE orders (
+		id SERIAL PRIMARY KEY,
+		user_id INTEGER NOT NULL REFERENCES users(id),
+		status VARCHAR(20) NOT NULL,
+		total NUMERIC(10,2) NOT NULL,
+		notes TEXT,
+		shipped_at TIMESTAMP,
+		created_at TIMESTAMP NOT NULL DEFAULT NOW()
+	)`,
+	`CREATE TABLE order_items (
+		order_id INTEGER NOT NULL REFERENCES orders(id),
+		product_id INTEGER NOT NULL REFERENCES products(id),
+		quantity INTEGER NOT NULL,
+		unit_price NUMERIC(10,2) NOT NULL,
+		PRIMARY KEY (order_id, product_id)
+	)`,
+	// NOTE: product_tags intentionally omitted (removed in prod)
+	`CREATE SCHEMA IF NOT EXISTS analytics`,
+	`CREATE TABLE analytics.events (
+		id SERIAL PRIMARY KEY,
+		event_type VARCHAR(50) NOT NULL,
+		user_id INTEGER NOT NULL REFERENCES public.users(id),
+		payload JSONB,
+		created_at TIMESTAMP NOT NULL DEFAULT NOW()
+	)`,
+	`CREATE TABLE reviews (
+		id SERIAL PRIMARY KEY,
+		product_id INTEGER NOT NULL REFERENCES products(id),
+		user_id INTEGER NOT NULL REFERENCES users(id),
+		rating INTEGER NOT NULL CHECK (rating BETWEEN 1 AND 5),
+		body TEXT,
+		created_at TIMESTAMP NOT NULL DEFAULT NOW()
+	)`,
+}
+
 // ── MySQL DDL ─────────────────────────────────────────────────────────────────
 
 var mysqlDropStatements = []string{

@@ -3,12 +3,15 @@ package engine
 import (
 	"context"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/atterpac/qry/internal/config"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -18,6 +21,10 @@ type PostgresProvider struct {
 	pool      *pgxpool.Pool
 	dsn       string
 	connected bool
+
+	// Transaction state
+	tx   pgx.Tx
+	conn *pgxpool.Conn // held while tx is active
 }
 
 func (p *PostgresProvider) Connect(ctx context.Context, cfg config.ConnectionConfig) error {
@@ -93,6 +100,58 @@ func (p *PostgresProvider) Capabilities() EngineCapabilities {
 		SupportsReturning: true,
 		IdentifierQuote:   `"`,
 	}
+}
+
+func (p *PostgresProvider) BeginTx(ctx context.Context) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.tx != nil {
+		return fmt.Errorf("transaction already active")
+	}
+	conn, err := p.pool.Acquire(ctx)
+	if err != nil {
+		return fmt.Errorf("acquiring connection: %w", err)
+	}
+	tx, err := conn.Begin(ctx)
+	if err != nil {
+		conn.Release()
+		return fmt.Errorf("beginning transaction: %w", err)
+	}
+	p.conn = conn
+	p.tx = tx
+	return nil
+}
+
+func (p *PostgresProvider) CommitTx(ctx context.Context) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.tx == nil {
+		return fmt.Errorf("no active transaction")
+	}
+	err := p.tx.Commit(ctx)
+	p.tx = nil
+	p.conn.Release()
+	p.conn = nil
+	return err
+}
+
+func (p *PostgresProvider) RollbackTx(ctx context.Context) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.tx == nil {
+		return fmt.Errorf("no active transaction")
+	}
+	err := p.tx.Rollback(ctx)
+	p.tx = nil
+	p.conn.Release()
+	p.conn = nil
+	return err
+}
+
+func (p *PostgresProvider) InTransaction() bool {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.tx != nil
 }
 
 func (p *PostgresProvider) ListDatabases(ctx context.Context) ([]string, error) {
@@ -260,8 +319,23 @@ func (p *PostgresProvider) ExecuteQuery(ctx context.Context, query string) (*Que
 	return p.executeExec(ctx, query, start)
 }
 
+// pgQueryer abstracts pool and tx for query execution.
+type pgQueryer interface {
+	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
+}
+
+// queryer returns the transaction if active, otherwise the pool.
+// Must be called while holding at least an RLock.
+func (p *PostgresProvider) queryer() pgQueryer {
+	if p.tx != nil {
+		return p.tx
+	}
+	return p.pool
+}
+
 func (p *PostgresProvider) executeSelect(ctx context.Context, query string, start time.Time) (*QueryResult, error) {
-	rows, err := p.pool.Query(ctx, query)
+	rows, err := p.queryer().Query(ctx, query)
 	if err != nil {
 		return nil, err
 	}
@@ -303,7 +377,7 @@ func (p *PostgresProvider) executeExec(ctx context.Context, query string, start 
 }
 
 func (p *PostgresProvider) executeExecArgs(ctx context.Context, query string, start time.Time, args []any) (*QueryResult, error) {
-	tag, err := p.pool.Exec(ctx, query, args...)
+	tag, err := p.queryer().Exec(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -339,6 +413,12 @@ func formatPgValue(v any) string {
 			return h[:8] + "-" + h[8:12] + "-" + h[12:16] + "-" + h[16:20] + "-" + h[20:]
 		}
 		return string(val)
+	case map[string]any, []any:
+		// pgx decodes JSON/JSONB into native Go types — marshal back to JSON
+		if b, err := json.Marshal(val); err == nil {
+			return string(b)
+		}
+		return fmt.Sprintf("%v", v)
 	default:
 		return fmt.Sprintf("%v", v)
 	}

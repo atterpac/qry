@@ -17,6 +17,7 @@ import (
 
 	"github.com/atterpac/qry/internal/autocomplete"
 	"github.com/atterpac/qry/internal/engine"
+	"github.com/atterpac/qry/internal/headless"
 	"github.com/atterpac/qry/internal/lsp"
 )
 
@@ -34,11 +35,19 @@ type QueryEditor struct {
 	wrapper    *tview.Flex
 	hasResults bool
 
+	// Last query result for piping
+	lastResultCols []string
+	lastResultRows [][]string
+
+	// Watch mode
+	watch *WatchState
+
 	// Autocomplete
-	overlay    *autocomplete.Overlay
-	acEngine   *autocomplete.SuggestionEngine
-	acCache    *autocomplete.SchemaCache
-	suppressAC bool
+	overlay       *autocomplete.Overlay
+	acEngine      *autocomplete.SuggestionEngine
+	acCache       *autocomplete.SchemaCache
+	suppressAC    bool
+	acDebounce    *time.Timer
 	schemaOverlay *schemaInfoOverlay
 }
 
@@ -74,6 +83,12 @@ func newQueryEditor(app *App, initialSQL string) *QueryEditor {
 	q.editor.SetTitle(" SQL ")
 	q.editor.SetTitleAlign(tview.AlignLeft)
 	theme.Register(q.editor)
+	q.editor.SetFocusFunc(func() {
+		app.textEditing = true
+	})
+	q.editor.SetBlurFunc(func() {
+		app.textEditing = false
+	})
 	if initialSQL != "" {
 		q.editor.SetText(initialSQL, true)
 	}
@@ -108,10 +123,23 @@ func newQueryEditor(app *App, initialSQL string) *QueryEditor {
 		SetResizable(true)
 
 	q.editor.SetChangedFunc(func() {
-		q.updateSuggestions()
+		if q.acDebounce != nil {
+			q.acDebounce.Stop()
+		}
+		q.acDebounce = time.AfterFunc(50*time.Millisecond, func() {
+			q.app.QueueUpdateDraw(func() {
+				q.updateSuggestions()
+			})
+		})
 	})
 
 	q.editor.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+		// Escape stops watch mode
+		if event.Key() == tcell.KeyEscape && q.watch != nil && q.watch.running {
+			q.stopWatch()
+			return nil
+		}
+
 		// Schema info overlay: Shift+K
 		if q.schemaOverlay.visible {
 			if event.Key() == tcell.KeyEscape || (event.Rune() == 'K' && event.Modifiers() == tcell.ModNone) {
@@ -147,6 +175,14 @@ func newQueryEditor(app *App, initialSQL string) *QueryEditor {
 			q.overlay.Hide()
 			q.suppressAC = true
 			q.executeQuery()
+			return nil
+		}
+		// Ctrl+X to explain
+		if event.Key() == tcell.KeyCtrlX {
+			sql := q.editor.GetText()
+			if sql != "" {
+				q.app.NavigateToExplainView(sql)
+			}
 			return nil
 		}
 		// Ctrl+E to open $EDITOR
@@ -189,7 +225,11 @@ func (q *QueryEditor) Start() {
 	}
 }
 
-func (q *QueryEditor) Stop() {}
+func (q *QueryEditor) Stop() {
+	if q.watch != nil && q.watch.running {
+		q.stopWatch()
+	}
+}
 
 // Draw renders the split view and then draws the autocomplete overlay on top.
 func (q *QueryEditor) Draw(screen tcell.Screen) {
@@ -205,6 +245,7 @@ func (q *QueryEditor) Hints() []components.KeyHint {
 	}
 	return []components.KeyHint{
 		{Key: "Ctrl+R", Description: "Execute query"},
+		{Key: "Ctrl+X", Description: "Explain"},
 		{Key: "Ctrl+E", Description: "$EDITOR"},
 		{Key: "Ctrl+S", Description: "Save query"},
 		{Key: "Shift+K", Description: "Schema info"},
@@ -259,6 +300,10 @@ func (q *QueryEditor) executeQuery() {
 		}
 
 		q.app.QueueUpdateDraw(func() {
+			// Store result for piping
+			q.lastResultCols = result.Columns
+			q.lastResultRows = result.Rows
+
 			if result.Message != "" {
 				q.showEmptyState("󰄬", "Query Executed", result.Message)
 				q.statusBar.SetText(fmt.Sprintf(" [green]%s[-] [%s](%s)[-]",
@@ -494,13 +539,17 @@ func (q *QueryEditor) cursorByteOffset(sql string) int {
 			col++
 			if col == toCol {
 				offset += bi
-				return offset
+				break
 			}
 		}
 		// If we didn't reach toCol, add full line length
 		if col < toCol {
 			offset += len(line)
 		}
+	}
+	// Clamp to string length — cursor can drift past text after edits
+	if offset > len(sql) {
+		offset = len(sql)
 	}
 	return offset
 }
@@ -783,6 +832,19 @@ func (q *QueryEditor) CommandContext() CommandViewContext {
 		ctx.Engine = string(q.app.Provider().EngineType())
 	}
 	return ctx
+}
+
+// BuildPipeData implements PipeableView.
+func (q *QueryEditor) BuildPipeData(format string) string {
+	if len(q.lastResultCols) == 0 {
+		return ""
+	}
+	result := &engine.QueryResult{
+		Columns:  q.lastResultCols,
+		Rows:     q.lastResultRows,
+		RowCount: len(q.lastResultRows),
+	}
+	return headless.Format(result, format)
 }
 
 var _ nav.Component = (*QueryEditor)(nil)
