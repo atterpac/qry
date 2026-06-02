@@ -4,33 +4,19 @@ import (
 	"context"
 	"time"
 
-	"github.com/atterpac/jig/components"
-	"github.com/gdamore/tcell/v2"
-	"github.com/rivo/tview"
+	"github.com/atterpac/dado/async"
+	"github.com/atterpac/dado/components"
 )
 
 // finderWrapper wraps components.Finder to implement nav.Component for page stack.
 type finderWrapper struct {
-	finder *components.Finder
+	*components.Finder
 }
 
-func (w *finderWrapper) Name() string                    { return "Find" }
-func (w *finderWrapper) Start()                          {}
-func (w *finderWrapper) Stop()                           {}
-func (w *finderWrapper) Hints() []components.KeyHint     { return nil }
-func (w *finderWrapper) Draw(screen tcell.Screen)        { w.finder.Draw(screen) }
-func (w *finderWrapper) GetRect() (int, int, int, int)   { return w.finder.GetRect() }
-func (w *finderWrapper) SetRect(x, y, width, height int) { w.finder.SetRect(x, y, width, height) }
-func (w *finderWrapper) InputHandler() func(*tcell.EventKey, func(tview.Primitive)) {
-	return w.finder.InputHandler()
-}
-func (w *finderWrapper) Focus(delegate func(tview.Primitive))        { w.finder.Focus(delegate) }
-func (w *finderWrapper) Blur()                                       { w.finder.Blur() }
-func (w *finderWrapper) HasFocus() bool                              { return w.finder.HasFocus() }
-func (w *finderWrapper) MouseHandler() func(tview.MouseAction, *tcell.EventMouse, func(tview.Primitive)) (bool, tview.Primitive) {
-	return w.finder.MouseHandler()
-}
-func (w *finderWrapper) PasteHandler() func(string, func(tview.Primitive)) { return nil }
+func (w *finderWrapper) Name() string                { return "Find" }
+func (w *finderWrapper) Start()                      {}
+func (w *finderWrapper) Stop()                       {}
+func (w *finderWrapper) Hints() []components.KeyHint { return nil }
 
 // showGlobalFinder opens the global fuzzy finder (Ctrl+P).
 func (a *App) showGlobalFinder() {
@@ -61,50 +47,51 @@ func (a *App) showGlobalFinder() {
 		a.app.Pages().Pop()
 	})
 
-	wrapper := &finderWrapper{finder: finder}
+	wrapper := &finderWrapper{Finder: finder}
 	a.app.Pages().Push(wrapper)
 	a.app.SetFocus(finder)
 
 	// Fetch items in background
-	go func() {
-		var items []components.FinderItem
-
-		provider := a.Provider()
-		if provider == nil {
-			return
-		}
-
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-
-		// Tables
-		tables, err := provider.ListTables(ctx, "")
-		if err == nil {
-			for _, t := range tables {
-				items = append(items, components.FinderItem{
-					ID:          t.Name,
-					Label:       t.Name,
-					Description: t.Type,
-					Category:    "Tables",
-				})
-			}
-		}
-
-		// Saved queries
-		profileName := a.ActiveProfileName()
-		if profile, ok := a.Config().GetProfile(profileName); ok {
-			for _, sq := range profile.SavedQueries {
-				items = append(items, components.FinderItem{
-					ID:          sq.Name,
-					Label:       sq.Name,
-					Description: sq.Query,
-					Category:    "Saved Queries",
-				})
-			}
-		}
-
-		a.QueueUpdateDraw(func() {
+	async.NewLoader[[]components.FinderItem]().
+		WithTimeout(10 * time.Second).
+		OnSuccess(func(items []components.FinderItem) {
 			finder.SetItems(items)
+		}).
+		OnError(func(err error) {}).
+		Run(func(ctx context.Context) ([]components.FinderItem, error) {
+			var items []components.FinderItem
+
+			provider := a.Provider()
+			if provider == nil {
+				return items, nil
+			}
+
+			// Tables
+			tables, err := provider.ListTables(ctx, "")
+			if err == nil {
+				for _, t := range tables {
+					items = append(items, components.FinderItem{
+						ID:          t.Name,
+						Label:       t.Name,
+						Description: t.Type,
+						Category:    "Tables",
+					})
+				}
+			}
+
+			// Saved queries
+			profileName := a.ActiveProfileName()
+			if profile, ok := a.Config().GetProfile(profileName); ok {
+				for _, sq := range profile.SavedQueries {
+					items = append(items, components.FinderItem{
+						ID:          sq.Name,
+						Label:       sq.Name,
+						Description: sq.Query,
+						Category:    "Saved Queries",
+					})
+				}
+			}
+
+			return items, nil
 		})
-	}()
 }

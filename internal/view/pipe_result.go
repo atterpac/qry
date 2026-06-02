@@ -2,13 +2,15 @@ package view
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"os/exec"
 	"strings"
 
-	"github.com/atterpac/jig/components"
-	"github.com/atterpac/jig/nav"
-	"github.com/atterpac/qry/internal/clipboard"
+	"github.com/atterpac/dado/async"
+	"github.com/atterpac/dado/clipboard"
+	"github.com/atterpac/dado/components"
+	"github.com/atterpac/dado/nav"
 	"github.com/gdamore/tcell/v2"
 )
 
@@ -40,19 +42,21 @@ func NewPipeResultView(app *App, output, command string) *PipeResultView {
 		p.CodeView.SetLanguage(components.LangNone)
 	}
 
-	p.CodeView.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
-		if event.Rune() == 'y' {
-			if err := clipboard.Copy(output); err != nil {
-				app.ShowError(fmt.Sprintf("Copy failed: %v", err))
-			} else {
-				app.ShowSuccess("Output copied to clipboard")
-			}
-			return nil
-		}
-		return event
-	})
-
 	return p
+}
+
+// HandleKey intercepts `y` to copy the output, delegating all other keys
+// (scrolling, etc.) to the embedded CodeView.
+func (p *PipeResultView) HandleKey(ev *tcell.EventKey) bool {
+	if ev.Key() == tcell.KeyRune && ev.Rune() == 'y' {
+		if err := clipboard.Copy(p.output); err != nil {
+			p.app.ShowError(fmt.Sprintf("Copy failed: %v", err))
+		} else {
+			p.app.ShowSuccess("Output copied to clipboard")
+		}
+		return true
+	}
+	return p.CodeView.HandleKey(ev)
 }
 
 func (p *PipeResultView) Name() string {
@@ -77,27 +81,8 @@ func (p *PipeResultView) Hints() []components.KeyHint {
 var _ nav.Component = (*PipeResultView)(nil)
 
 func (a *App) executePipe(data, shellCmd string) {
-	go func() {
-		cmd := exec.Command("sh", "-c", shellCmd)
-		cmd.Stdin = strings.NewReader(data)
-
-		var stdout, stderr bytes.Buffer
-		cmd.Stdout = &stdout
-		cmd.Stderr = &stderr
-
-		err := cmd.Run()
-
-		a.QueueUpdateDraw(func() {
-			if err != nil {
-				errMsg := stderr.String()
-				if errMsg == "" {
-					errMsg = err.Error()
-				}
-				a.ShowError(fmt.Sprintf("Pipe failed: %s", errMsg))
-				return
-			}
-
-			output := stdout.String()
+	async.NewLoader[string]().
+		OnSuccess(func(output string) {
 			if output == "" {
 				a.ShowInfo("Pipe produced no output")
 				return
@@ -105,6 +90,26 @@ func (a *App) executePipe(data, shellCmd string) {
 
 			view := NewPipeResultView(a, output, shellCmd)
 			a.app.Pages().Push(view)
+		}).
+		OnError(func(err error) {
+			a.ShowError(fmt.Sprintf("Pipe failed: %s", err))
+		}).
+		Run(func(ctx context.Context) (string, error) {
+			cmd := exec.CommandContext(ctx, "sh", "-c", shellCmd)
+			cmd.Stdin = strings.NewReader(data)
+
+			var stdout, stderr bytes.Buffer
+			cmd.Stdout = &stdout
+			cmd.Stderr = &stderr
+
+			if err := cmd.Run(); err != nil {
+				errMsg := stderr.String()
+				if errMsg == "" {
+					errMsg = err.Error()
+				}
+				return "", fmt.Errorf("%s", errMsg)
+			}
+
+			return stdout.String(), nil
 		})
-	}()
 }

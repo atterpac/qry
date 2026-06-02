@@ -6,11 +6,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/atterpac/jig/components"
-	"github.com/atterpac/jig/nav"
-	"github.com/atterpac/jig/theme"
+	"github.com/atterpac/dado/components"
+	"github.com/atterpac/dado/core"
+	"github.com/atterpac/dado/nav"
+	"github.com/atterpac/dado/theme"
 	"github.com/gdamore/tcell/v2"
-	"github.com/rivo/tview"
 
 	"github.com/atterpac/qry/internal/engine"
 )
@@ -18,22 +18,22 @@ import (
 // SchemaExplorer is a MasterDetailView showing tables on the left and column info on the right.
 type SchemaExplorer struct {
 	*components.MasterDetailView
-	app           *App
-	tableList     *tview.Table
-	detailView    *tview.TextView
-	tables        []engine.TableInfo
-	filtered      []engine.TableInfo
-	schema        string
-	schemas       []string
-	schemaIdx     int
-	searchQuery   string
+	app         *App
+	tableList   *core.Table
+	detailView  *core.TextView
+	tables      []engine.TableInfo
+	filtered    []engine.TableInfo
+	schema      string
+	schemas     []string
+	schemaIdx   int
+	searchQuery string
 }
 
 func NewSchemaExplorer(app *App) *SchemaExplorer {
 	s := &SchemaExplorer{
 		app:        app,
-		tableList:  tview.NewTable(),
-		detailView: tview.NewTextView(),
+		tableList:  core.NewTable(),
+		detailView: core.NewTextView(),
 		schema:     "public",
 	}
 
@@ -42,11 +42,8 @@ func NewSchemaExplorer(app *App) *SchemaExplorer {
 	s.tableList.SetSelectedStyle(tcell.StyleDefault.
 		Foreground(tcell.ColorWhite).
 		Background(tcell.ColorDarkCyan))
-	theme.Register(s.tableList)
 
 	s.detailView.SetDynamicColors(true)
-	s.detailView.SetWordWrap(true)
-	theme.Register(s.detailView)
 
 	s.MasterDetailView = components.NewMasterDetailView().
 		SetMasterTitle("Tables").
@@ -84,60 +81,63 @@ func NewSchemaExplorer(app *App) *SchemaExplorer {
 		s.onSelectionChanged(row)
 	})
 
-	s.tableList.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
-		if s.MasterDetailView.HandleSearchKey(event) {
-			return nil
-		}
+	return s
+}
 
-		switch event.Rune() {
+// HandleKey routes key events for SchemaExplorer, handling vim navigation and custom actions.
+func (s *SchemaExplorer) HandleKey(ev *tcell.EventKey) bool {
+	if s.MasterDetailView.HandleSearchKey(ev) {
+		return true
+	}
+
+	if ev.Key() == tcell.KeyRune {
+		switch ev.Rune() {
 		case 'j':
 			row, _ := s.tableList.GetSelection()
 			if row < s.tableList.GetRowCount()-1 {
 				s.tableList.Select(row+1, 0)
 			}
-			return nil
+			return true
 		case 'k':
 			row, _ := s.tableList.GetSelection()
 			if row > 1 {
 				s.tableList.Select(row-1, 0)
 			}
-			return nil
+			return true
 		case 'e':
 			s.app.NavigateToQueryEditor()
-			return nil
+			return true
 		case 'r':
 			s.loadTables()
-			return nil
+			return true
 		case 'g':
 			s.tableList.Select(1, 0)
-			return nil
+			return true
 		case 'G':
 			s.tableList.Select(s.tableList.GetRowCount()-1, 0)
-			return nil
+			return true
 		case 's':
 			s.cycleSchema()
-			return nil
+			return true
 		case 'i':
 			s.app.NavigateToConnectionInfo()
-			return nil
+			return true
 		case 'E':
 			s.app.NavigateToERD(s.schema)
-			return nil
+			return true
 		}
+	}
 
-		if event.Key() == tcell.KeyEnter {
-			row, _ := s.tableList.GetSelection()
-			if row > 0 && row-1 < len(s.filtered) {
-				t := s.filtered[row-1]
-				s.app.NavigateToTableData(t.Schema, t.Name)
-			}
-			return nil
+	if ev.Key() == tcell.KeyEnter {
+		row, _ := s.tableList.GetSelection()
+		if row > 0 && row-1 < len(s.filtered) {
+			t := s.filtered[row-1]
+			s.app.NavigateToTableData(t.Schema, t.Name)
 		}
+		return true
+	}
 
-		return event
-	})
-
-	return s
+	return s.MasterDetailView.HandleKey(ev)
 }
 
 func (s *SchemaExplorer) Name() string { return "Tables" }
@@ -238,17 +238,17 @@ func (s *SchemaExplorer) renderTableList() {
 	s.tableList.Clear()
 
 	// Header
-	headerStyle := tcell.StyleDefault.Bold(true).Foreground(theme.Get().Accent())
-	s.tableList.SetCell(0, 0, tview.NewTableCell("Name").SetStyle(headerStyle).SetSelectable(false).SetExpansion(1))
-	s.tableList.SetCell(0, 1, tview.NewTableCell("Type").SetStyle(headerStyle).SetSelectable(false))
+	accentColor := theme.Get().Accent()
+	s.tableList.SetCell(0, 0, core.NewTableCell("Name").SetTextColor(accentColor).SetSelectable(false).SetExpansion(1))
+	s.tableList.SetCell(0, 1, core.NewTableCell("Type").SetTextColor(accentColor).SetSelectable(false))
 
 	for i, t := range s.filtered {
 		typeIcon := "󰓫"
 		if t.Type == "view" {
 			typeIcon = "󰈔"
 		}
-		s.tableList.SetCell(i+1, 0, tview.NewTableCell(t.Name).SetExpansion(1))
-		s.tableList.SetCell(i+1, 1, tview.NewTableCell(typeIcon+" "+t.Type).SetTextColor(tcell.ColorGray))
+		s.tableList.SetCell(i+1, 0, core.NewTableCell(t.Name).SetExpansion(1))
+		s.tableList.SetCell(i+1, 1, core.NewTableCell(typeIcon+" "+t.Type).SetTextColor(tcell.ColorGray))
 	}
 
 	if len(s.filtered) > 0 {

@@ -7,15 +7,18 @@ import (
 	"sync"
 	"time"
 
-	"github.com/atterpac/jig/binding"
-	"github.com/atterpac/jig/components"
-	"github.com/atterpac/jig/layout"
-	"github.com/atterpac/jig/nav"
-	"github.com/atterpac/jig/theme"
-	"github.com/atterpac/jig/theme/themes"
-	"github.com/atterpac/jig/validators"
+	"github.com/atterpac/dado/async"
+	"github.com/atterpac/dado/binding"
+	"github.com/atterpac/dado/components"
+	"github.com/atterpac/dado/core"
+	"github.com/atterpac/dado/help"
+	"github.com/atterpac/dado/input"
+	"github.com/atterpac/dado/layout"
+	"github.com/atterpac/dado/nav"
+	"github.com/atterpac/dado/theme"
+	"github.com/atterpac/dado/theme/themes"
+	"github.com/atterpac/dado/validators"
 	"github.com/gdamore/tcell/v2"
-	"github.com/rivo/tview"
 
 	"github.com/atterpac/qry/internal/config"
 	"github.com/atterpac/qry/internal/engine"
@@ -63,6 +66,9 @@ type App struct {
 	// Jump list for Ctrl+O / Ctrl+I navigation
 	jumpList   []JumpEntry
 	jumpCursor int
+
+	// Global key actions (single source of truth for dispatch + help).
+	actions *input.ActionRegistry
 }
 
 // NewApp creates the application with a database provider.
@@ -98,18 +104,40 @@ func (a *App) buildApp() {
 			if c != nil {
 				a.menu.SetHints(c.Hints())
 			}
+			// Reset keyboard focus to the page stack whenever the active page
+			// changes. Views may move focus to an inner widget (e.g. a grid)
+			// while active; without this, popping back would leave the
+			// FocusManager pointing at a widget no longer in the tree, so key
+			// events would never reach the new top view. Flows that focus a
+			// specific widget (forms, finder) do so after Push, overriding this.
+			a.app.SetFocus(a.app.Pages())
 		},
 	})
 
 	// Initialize toast manager
-	a.toasts = components.NewToastManager(a.app.GetApplication())
+	a.toasts = components.NewToastManager()
 	a.toasts.SetPosition(components.ToastBottomRight)
 	a.toasts.SetMaxVisible(3)
 	a.toasts.SetDefaultDuration(3 * time.Second)
 
-	a.app.GetApplication().SetAfterDrawFunc(func(screen tcell.Screen) {
+	a.app.GetApp().SetAfterDrawFunc(func(screen tcell.Screen) {
 		w, h := screen.Size()
 		a.toasts.Draw(screen, w, h)
+	})
+
+	// Wire the built-in live theme selector. Seed it with the saved theme and
+	// persist selections back to config.
+	current := a.cfg.Theme
+	if current == "" {
+		current = themes.DefaultName
+	}
+	a.app.EnableThemes(layout.ThemeOptions{
+		Default: current,
+		OnChange: func(name string) {
+			a.cfg.Theme = name
+			go a.cfg.Save()
+			a.ShowSuccess(fmt.Sprintf("Theme set to %s", name))
+		},
 	})
 
 	// Reactive binding for profile status — use Subscribe (not BindToWithDraw)
@@ -210,6 +238,16 @@ func (a *App) updateProfileStatus(profile string) {
 }
 
 func (a *App) setup() {
+	a.actions = input.NewActionRegistry().
+		AddSimple("help", '?', "Help", a.showHelp).
+		AddSimple("theme", 'T', "Theme selector", a.showThemeSelector).
+		AddSimple("profile", 'P', "Profile selector", a.showProfileSelector).
+		AddCtrl("finder", 'p', "Global finder", a.showGlobalFinder).
+		AddSimple("command", ':', "Command bar", a.showCommandBar).
+		AddSimple("bookmark", '\'', "Jump to bookmark", a.showBookmarkPicker).
+		AddCtrl("jump-back", 'o', "Jump back", a.jumpBack).
+		AddCtrl("jump-forward", 'i', "Jump forward", a.jumpForward)
+
 	a.app.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		// Skip global handling when command bar is active
 		if a.statusBar.IsCommandMode() {
@@ -253,36 +291,11 @@ func (a *App) setup() {
 				return nil
 			}
 
-		case event.Rune() == '?' && !isModal:
-			a.showHelp()
-			return nil
+		}
 
-		case event.Rune() == 'T' && !isModal:
-			a.showThemeSelector()
-			return nil
-
-		case event.Rune() == 'P' && !isModal:
-			a.showProfileSelector()
-			return nil
-
-		case event.Key() == tcell.KeyCtrlP && !isModal:
-			a.showGlobalFinder()
-			return nil
-
-		case event.Rune() == ':' && !isModal:
-			a.showCommandBar()
-			return nil
-
-		case event.Rune() == '\'' && !isModal:
-			a.showBookmarkPicker()
-			return nil
-
-		case event.Key() == tcell.KeyCtrlO && !isModal:
-			a.jumpBack()
-			return nil
-
-		case event.Key() == tcell.KeyCtrlI && !isModal:
-			a.jumpForward()
+		// Simple global shortcuts live in the action registry, which is also
+		// the source of truth for the help modal's "Global Hotkeys" section.
+		if !isModal && a.actions.Handle(event) {
 			return nil
 		}
 
@@ -301,17 +314,17 @@ func (a *App) setup() {
 func (a *App) showFirstRunSetup() {
 	form := components.NewFormBuilder().
 		Text("name", "Profile Name").
-			Value("default").
-			Validate(validators.Required()).
-			Done().
+		Value("default").
+		Validate(validators.Required()).
+		Done().
 		Select("engine", "Engine", []string{"sqlite", "postgres", "mysql"}).
-			Done().
+		Done().
 		Text("dsn", "DSN").
-			Placeholder("postgres://user:pass@host:5432/db").
-			Done().
+		Placeholder("postgres://user:pass@host:5432/db").
+		Done().
 		Text("path", "Path").
-			Placeholder("path/to/database.db").
-			Done().
+		Placeholder("path/to/database.db").
+		Done().
 		OnSubmit(func(values map[string]any) {
 			profileName := values["name"].(string)
 			engineName := values["engine"].(string)
@@ -333,40 +346,36 @@ func (a *App) showFirstRunSetup() {
 			// Connect in background (same pattern as switchProfile)
 			a.activeProfile.Set(profileName + " (connecting...)")
 
-			go func() {
-				connCfg = connCfg.ExpandEnv()
+			async.NewLoader[engine.Provider]().
+				WithTimeout(10 * time.Second).
+				OnSuccess(func(newProvider engine.Provider) {
+					a.mu.Lock()
+					a.provider = newProvider
+					a.mu.Unlock()
 
-				newProvider, err := engine.NewProvider(connCfg.Engine)
-				if err != nil {
-					a.QueueUpdateDraw(func() {
-						a.activeProfile.Set(profileName + " (failed)")
-						a.ShowError(fmt.Sprintf("Engine error: %v", err))
-					})
-					return
-				}
-
-				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-				defer cancel()
-
-				if err := newProvider.Connect(ctx, connCfg); err != nil {
-					a.QueueUpdateDraw(func() {
-						a.activeProfile.Set(profileName + " (failed)")
-						a.ShowError(fmt.Sprintf("Connection failed: %v", err))
-					})
-					return
-				}
-
-				a.mu.Lock()
-				a.provider = newProvider
-				a.mu.Unlock()
-
-				a.QueueUpdateDraw(func() {
 					a.activeProfile.Set(profileName)
 					a.app.Pages().Clear()
 					a.NavigateToSchemaExplorer()
 					a.ShowSuccess(fmt.Sprintf("Connected to %s", profileName))
+				}).
+				OnError(func(err error) {
+					a.activeProfile.Set(profileName + " (failed)")
+					a.ShowError(err.Error())
+				}).
+				Run(func(ctx context.Context) (engine.Provider, error) {
+					connCfg = connCfg.ExpandEnv()
+
+					newProvider, err := engine.NewProvider(connCfg.Engine)
+					if err != nil {
+						return nil, fmt.Errorf("Engine error: %v", err)
+					}
+
+					if err := newProvider.Connect(ctx, connCfg); err != nil {
+						return nil, fmt.Errorf("Connection failed: %v", err)
+					}
+
+					return newProvider, nil
 				})
-			}()
 		}).
 		OnCancel(func() {
 			a.app.Stop()
@@ -520,20 +529,19 @@ func (a *App) ShowSearchMode(currentText string, callbacks components.SearchCall
 	a.statusBar.SetOnComplete(nil)
 
 	a.statusBar.EnterCommandMode()
-	input := a.statusBar.GetCommandInput()
 	if currentText != "" {
-		input.SetText(currentText)
+		a.statusBar.SetCommandText(currentText)
 	}
-	a.app.SetFocus(input)
+	a.app.SetFocus(a.statusBar)
 
-	input.SetChangedFunc(func(text string) {
+	a.statusBar.SetOnCommandChange(func(text string) {
 		if callbacks.OnChange != nil {
 			callbacks.OnChange(text)
 		}
 	})
 
 	a.statusBar.SetOnCommandSubmit(func(text string) {
-		input.SetChangedFunc(nil)
+		a.statusBar.SetOnCommandChange(nil)
 		a.statusBar.ExitCommandMode()
 		if callbacks.OnSubmit != nil {
 			callbacks.OnSubmit(text)
@@ -541,7 +549,7 @@ func (a *App) ShowSearchMode(currentText string, callbacks components.SearchCall
 		a.refocusCurrent()
 	})
 	a.statusBar.SetOnCommandCancel(func() {
-		input.SetChangedFunc(nil)
+		a.statusBar.SetOnCommandChange(nil)
 		a.statusBar.ExitCommandMode()
 		if callbacks.OnCancel != nil {
 			callbacks.OnCancel()
@@ -583,7 +591,7 @@ func (a *App) showCommandBar() {
 	})
 
 	a.statusBar.EnterCommandMode()
-	a.app.SetFocus(a.statusBar.GetCommandInput())
+	a.app.SetFocus(a.statusBar)
 
 	a.statusBar.SetOnCommandSubmit(func(text string) {
 		a.statusBar.ExitCommandMode()
@@ -959,117 +967,73 @@ func (a *App) showBookmarkPicker() {
 }
 
 func (a *App) refocusCurrent() {
-	if c := a.app.Pages().Current(); c != nil {
-		a.app.SetFocus(c)
-	}
+	// Focus the page stack; key events route through Pages to the current
+	// component's HandleKey.
+	a.app.SetFocus(a.app.Pages())
+}
+
+// helpModel builds the help content: global hotkeys are derived from the
+// action registry (single source of truth with key dispatch), with the few
+// specially-handled keys and the command-bar commands added as static sections.
+func (a *App) helpModel() *help.Help {
+	return help.New().
+		SetAppName("qry").
+		AddSection("Navigation", []help.ActionInfo{
+			{Key: "q", Description: "Quit / pop view"},
+			{Key: "Esc", Description: "Pop view / dismiss modal"},
+		}).
+		AddRegistry("Global Hotkeys", a.actions).
+		AddSection("Commands", []help.ActionInfo{
+			{Key: "tables", Description: "Schema explorer"},
+			{Key: "editor", Description: "Query editor"},
+			{Key: "info", Description: "Connection info"},
+			{Key: "run <sql>", Description: "Execute SQL"},
+			{Key: "table <n>", Description: "Open table data"},
+			{Key: "sort <col>", Description: "Sort by column"},
+			{Key: "count", Description: "Count rows"},
+			{Key: "describe", Description: "Show table schema"},
+			{Key: "pipe", Description: "Pipe data to shell command"},
+			{Key: "begin", Description: "Start transaction"},
+			{Key: "commit", Description: "Commit transaction"},
+			{Key: "rollback", Description: "Rollback transaction"},
+			{Key: "discard", Description: "Discard pending edits/inserts/deletes"},
+			{Key: "dry-run", Description: "Preview changes (rollback)"},
+			{Key: "explain", Description: "Query plan visualization"},
+			{Key: "watch <d>", Description: "Re-run query on interval"},
+			{Key: "diff", Description: "Compare schemas between profiles"},
+			{Key: "profile", Description: "Switch profile"},
+			{Key: "quit", Description: "Exit"},
+		})
 }
 
 func (a *App) showHelp() {
-	helpText := `[::b]qry — Database Query Client[::-]
+	var b strings.Builder
+	b.WriteString("[::b]qry — Database Query Client[::-]\n")
+	for _, section := range a.helpModel().GetSections() {
+		b.WriteString("\n[::b]" + section.Name + "[::-]\n")
+		for _, act := range section.Actions {
+			fmt.Fprintf(&b, "  %-10s %s\n", act.Key, act.Description)
+		}
+	}
 
-[::b]Global Hotkeys[::-]
-  q          Quit / pop view
-  Esc        Pop view / dismiss modal
-  ?          This help
-  T          Theme selector
-  P          Profile selector
-  :          Command bar
-  '          Jump to bookmark
-  Ctrl+O/I   Jump back/forward
-
-[::b]Commands[::-]
-  tables     Schema explorer
-  editor     Query editor
-  info       Connection info
-  run <sql>  Execute SQL
-  table <n>  Open table data
-  sort <col> Sort by column
-  count      Count rows
-  describe   Show table schema
-  pipe       Pipe data to shell command
-  begin      Start transaction
-  commit     Commit transaction
-  rollback   Rollback transaction
-  discard    Discard pending edits/inserts/deletes
-  dry-run    Preview changes (rollback)
-  explain    Query plan visualization
-  watch <d>  Re-run query on interval
-  diff       Compare schemas between profiles
-  profile    Switch profile
-  quit       Exit`
-
-	tv := tview.NewTextView()
+	tv := core.NewTextView()
 	tv.SetDynamicColors(true)
-	tv.SetText(helpText)
-	tv.SetTextAlign(tview.AlignLeft)
+	tv.SetText(strings.TrimRight(b.String(), "\n"))
+	tv.SetTextAlign(core.AlignLeft)
 
 	modal := components.NewModal(components.ModalConfig{
 		Title:  "Help",
 		Width:  60,
-		Height: 22,
+		Height: 26,
 	}).SetContent(tv)
 
 	a.app.Pages().Push(modal)
 }
 
 func (a *App) showThemeSelector() {
-	themeNames := themes.Names()
-	currentTheme := a.cfg.Theme
-	if currentTheme == "" {
-		currentTheme = themes.DefaultName
-	}
-
-	selector := theme.NewThemeSelectorModal(themeNames, currentTheme)
-
-	selector.SetOnPreview(func(name string) {
-		if t := themes.Get(name); t != nil {
-			theme.SetProvider(t)
-		}
-	})
-
-	selector.SetOnSelect(func(name string) {
-		if t := themes.Get(name); t != nil {
-			theme.SetProvider(t)
-			a.cfg.Theme = name
-			go a.cfg.Save()
-			a.app.Pages().Pop()
-			a.ShowSuccess(fmt.Sprintf("Theme set to %s", name))
-		}
-	})
-
-	selector.SetOnCancel(func() {
-		if t := themes.Get(currentTheme); t != nil {
-			theme.SetProvider(t)
-		}
-		a.app.Pages().Pop()
-	})
-
-	wrapper := &themeSelectorWrapper{selector: selector}
-	a.app.Pages().Push(wrapper)
+	// The live-preview selector is wired via layout.App.EnableThemes in buildApp.
+	a.app.OpenThemeSelector()
 }
-
-// themeSelectorWrapper wraps ThemeSelectorModal to implement nav.Component.
-type themeSelectorWrapper struct {
-	selector *theme.ThemeSelectorModal
-}
-
-func (w *themeSelectorWrapper) Name() string                    { return "Theme" }
-func (w *themeSelectorWrapper) Start()                          {}
-func (w *themeSelectorWrapper) Stop()                           {}
-func (w *themeSelectorWrapper) Hints() []components.KeyHint     { return nil }
-func (w *themeSelectorWrapper) Draw(screen tcell.Screen)        { w.selector.Draw(screen) }
-func (w *themeSelectorWrapper) GetRect() (int, int, int, int)   { return w.selector.GetRect() }
-func (w *themeSelectorWrapper) SetRect(x, y, width, height int) { w.selector.SetRect(x, y, width, height) }
-func (w *themeSelectorWrapper) InputHandler() func(*tcell.EventKey, func(tview.Primitive)) {
-	return w.selector.InputHandler()
-}
-func (w *themeSelectorWrapper) Focus(delegate func(tview.Primitive)) { w.selector.Focus(delegate) }
-func (w *themeSelectorWrapper) Blur()                                { w.selector.Blur() }
-func (w *themeSelectorWrapper) HasFocus() bool                       { return w.selector.HasFocus() }
-func (w *themeSelectorWrapper) MouseHandler() func(tview.MouseAction, *tcell.EventMouse, func(tview.Primitive)) (bool, tview.Primitive) {
-	return w.selector.MouseHandler()
-}
-func (w *themeSelectorWrapper) PasteHandler() func(string, func(tview.Primitive)) { return nil }
 
 func (a *App) showProfileSelector() {
 	profiles := a.cfg.ListProfiles()
@@ -1110,57 +1074,49 @@ func (a *App) showProfileSelector() {
 func (a *App) switchProfile(name string) {
 	a.activeProfile.Set(name + " (connecting...)")
 
-	go func() {
-		profile, ok := a.cfg.GetProfile(name)
-		if !ok {
-			a.QueueUpdateDraw(func() {
-				a.activeProfile.Set(name + " (failed)")
-				a.ShowError(fmt.Sprintf("Profile %q not found", name))
-			})
-			return
-		}
+	async.NewLoader[engine.Provider]().
+		WithTimeout(10 * time.Second).
+		OnSuccess(func(newProvider engine.Provider) {
+			a.mu.Lock()
+			oldProvider := a.provider
+			a.provider = newProvider
+			a.mu.Unlock()
 
-		profile = profile.ExpandEnv()
+			if oldProvider != nil {
+				oldProvider.Close()
+			}
 
-		newProvider, err := engine.NewProvider(profile.Engine)
-		if err != nil {
-			a.QueueUpdateDraw(func() {
-				a.activeProfile.Set(name + " (failed)")
-				a.ShowError(fmt.Sprintf("Engine error: %v", err))
-			})
-			return
-		}
+			if err := a.cfg.SetActiveProfile(name); err == nil {
+				go a.cfg.Save()
+			}
 
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-
-		if err := newProvider.Connect(ctx, profile); err != nil {
-			a.QueueUpdateDraw(func() {
-				a.activeProfile.Set(name + " (failed)")
-				a.ShowError(fmt.Sprintf("Connection failed: %v", err))
-			})
-			return
-		}
-
-		a.mu.Lock()
-		oldProvider := a.provider
-		a.provider = newProvider
-		a.mu.Unlock()
-
-		if oldProvider != nil {
-			oldProvider.Close()
-		}
-
-		if err := a.cfg.SetActiveProfile(name); err == nil {
-			go a.cfg.Save()
-		}
-
-		a.QueueUpdateDraw(func() {
 			a.activeProfile.Set(name)
 			a.ShowSuccess(fmt.Sprintf("Switched to %s", name))
 			// Clear the stack and push fresh schema explorer
 			a.app.Pages().Clear()
 			a.NavigateToSchemaExplorer()
+		}).
+		OnError(func(err error) {
+			a.activeProfile.Set(name + " (failed)")
+			a.ShowError(err.Error())
+		}).
+		Run(func(ctx context.Context) (engine.Provider, error) {
+			profile, ok := a.cfg.GetProfile(name)
+			if !ok {
+				return nil, fmt.Errorf("Profile %q not found", name)
+			}
+
+			profile = profile.ExpandEnv()
+
+			newProvider, err := engine.NewProvider(profile.Engine)
+			if err != nil {
+				return nil, fmt.Errorf("Engine error: %v", err)
+			}
+
+			if err := newProvider.Connect(ctx, profile); err != nil {
+				return nil, fmt.Errorf("Connection failed: %v", err)
+			}
+
+			return newProvider, nil
 		})
-	}()
 }

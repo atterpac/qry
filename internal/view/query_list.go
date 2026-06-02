@@ -4,11 +4,11 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/atterpac/jig/components"
-	"github.com/atterpac/jig/nav"
-	"github.com/atterpac/jig/theme"
+	"github.com/atterpac/dado/components"
+	"github.com/atterpac/dado/core"
+	"github.com/atterpac/dado/nav"
+	"github.com/atterpac/dado/theme"
 	"github.com/gdamore/tcell/v2"
-	"github.com/rivo/tview"
 
 	"github.com/atterpac/qry/internal/config"
 )
@@ -17,8 +17,8 @@ import (
 type QueryList struct {
 	*components.MasterDetailView
 	app         *App
-	queryTable  *tview.Table
-	preview     *tview.TextView
+	queryTable  *core.Table
+	preview     *core.TextView
 	queries     []config.SavedQuery
 	filtered    []config.SavedQuery
 	searchQuery string
@@ -27,8 +27,8 @@ type QueryList struct {
 func NewQueryList(app *App) *QueryList {
 	q := &QueryList{
 		app:        app,
-		queryTable: tview.NewTable(),
-		preview:    tview.NewTextView(),
+		queryTable: core.NewTable(),
+		preview:    core.NewTextView(),
 	}
 
 	q.queryTable.SetSelectable(true, false)
@@ -36,11 +36,9 @@ func NewQueryList(app *App) *QueryList {
 	q.queryTable.SetSelectedStyle(tcell.StyleDefault.
 		Foreground(tcell.ColorWhite).
 		Background(tcell.ColorDarkCyan))
-	theme.Register(q.queryTable)
 
 	q.preview.SetDynamicColors(true)
 	q.preview.SetWordWrap(true)
-	theme.Register(q.preview)
 
 	q.MasterDetailView = components.NewMasterDetailView().
 		SetMasterTitle("Saved Queries").
@@ -75,47 +73,51 @@ func NewQueryList(app *App) *QueryList {
 		q.onSelectionChanged(row)
 	})
 
-	q.queryTable.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
-		if q.MasterDetailView.HandleSearchKey(event) {
-			return nil
-		}
+	return q
+}
 
+// HandleKey routes keyboard input: search keys first, then vim navigation and
+// view actions, falling back to the table's own navigation (arrow keys).
+func (q *QueryList) HandleKey(event *tcell.EventKey) bool {
+	if q.MasterDetailView.HandleSearchKey(event) {
+		return true
+	}
+
+	if event.Key() == tcell.KeyRune {
 		switch event.Rune() {
 		case 'j':
 			row, _ := q.queryTable.GetSelection()
 			if row < q.queryTable.GetRowCount()-1 {
 				q.queryTable.Select(row+1, 0)
 			}
-			return nil
+			return true
 		case 'k':
 			row, _ := q.queryTable.GetSelection()
 			if row > 1 {
 				q.queryTable.Select(row-1, 0)
 			}
-			return nil
+			return true
 		case 'g':
 			q.queryTable.Select(1, 0)
-			return nil
+			return true
 		case 'G':
 			q.queryTable.Select(q.queryTable.GetRowCount()-1, 0)
-			return nil
+			return true
 		case 'd':
 			q.deleteSelected()
-			return nil
+			return true
 		case 'r':
 			q.runSelected()
-			return nil
+			return true
 		}
+	}
 
-		if event.Key() == tcell.KeyEnter {
-			q.openSelected()
-			return nil
-		}
+	if event.Key() == tcell.KeyEnter {
+		q.openSelected()
+		return true
+	}
 
-		return event
-	})
-
-	return q
+	return q.queryTable.HandleKey(event)
 }
 
 func (q *QueryList) Name() string { return "Saved Queries" }
@@ -157,11 +159,12 @@ func (q *QueryList) applyFilter() {
 func (q *QueryList) renderQueries() {
 	q.queryTable.Clear()
 
-	headerStyle := tcell.StyleDefault.Bold(true).Foreground(theme.Get().Accent())
-	q.queryTable.SetCell(0, 0, tview.NewTableCell("Name").SetStyle(headerStyle).SetSelectable(false))
+	q.queryTable.SetCell(0, 0, core.NewTableCell("Name").
+		SetTextColor(theme.Get().Accent()).
+		SetSelectable(false))
 
 	for i, sq := range q.filtered {
-		q.queryTable.SetCell(i+1, 0, tview.NewTableCell(" "+sq.Name))
+		q.queryTable.SetCell(i+1, 0, core.NewTableCell(" "+sq.Name))
 	}
 
 	if len(q.filtered) > 0 {

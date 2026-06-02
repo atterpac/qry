@@ -9,11 +9,12 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/atterpac/jig/components"
-	"github.com/atterpac/jig/nav"
-	"github.com/atterpac/jig/theme"
+	"github.com/atterpac/dado/async"
+	"github.com/atterpac/dado/components"
+	"github.com/atterpac/dado/core"
+	"github.com/atterpac/dado/nav"
+	"github.com/atterpac/dado/theme"
 	"github.com/gdamore/tcell/v2"
-	"github.com/rivo/tview"
 
 	"github.com/atterpac/qry/internal/autocomplete"
 	"github.com/atterpac/qry/internal/engine"
@@ -25,14 +26,13 @@ import (
 type QueryEditor struct {
 	*components.Split
 	app        *App
-	editor     *tview.TextArea
+	editor     *components.TextArea
 	grid       *components.DataGrid
 	source     *components.SliceSource
-	statusBar  *tview.TextView
-	resultPane *tview.Flex
+	statusBar  *core.TextView
+	resultPane *core.Flex
 	emptyState *components.EmptyState
 	lastSQL    string
-	wrapper    *tview.Flex
 	hasResults bool
 
 	// Last query result for piping
@@ -63,9 +63,9 @@ func newQueryEditor(app *App, initialSQL string) *QueryEditor {
 	cache := autocomplete.NewSchemaCache(5 * time.Minute)
 	q := &QueryEditor{
 		app:       app,
-		editor:    tview.NewTextArea(),
+		editor:    components.NewTextArea("sql"),
 		source:    components.NewSliceSource(nil, nil).SetReadOnly(true),
-		statusBar: tview.NewTextView(),
+		statusBar: core.NewTextView(),
 		acCache:   cache,
 		acEngine:  autocomplete.NewSuggestionEngine(cache, "public"),
 	}
@@ -80,15 +80,8 @@ func newQueryEditor(app *App, initialSQL string) *QueryEditor {
 
 	q.editor.SetPlaceholder("Enter SQL query... (Ctrl+J to execute)")
 	q.editor.SetBorder(true)
-	q.editor.SetTitle(" SQL ")
-	q.editor.SetTitleAlign(tview.AlignLeft)
-	theme.Register(q.editor)
-	q.editor.SetFocusFunc(func() {
-		app.textEditing = true
-	})
-	q.editor.SetBlurFunc(func() {
-		app.textEditing = false
-	})
+	q.editor.SetTitle("SQL")
+	q.editor.SetTitleAlign(core.AlignLeft)
 	if initialSQL != "" {
 		q.editor.SetText(initialSQL, true)
 	}
@@ -103,15 +96,13 @@ func newQueryEditor(app *App, initialSQL string) *QueryEditor {
 
 	q.statusBar.SetDynamicColors(true)
 	q.statusBar.SetText(fmt.Sprintf(" [%s]Ready[-]", theme.TagFgDim()))
-	theme.Register(q.statusBar)
 
 	// Empty state shown before any query is executed
 	q.emptyState = components.NewEmptyState().
 		Configure("󰍉", "No Results", "Execute a query with Ctrl+R")
 
 	// Wrap grid + status in a flex
-	q.resultPane = tview.NewFlex().SetDirection(tview.FlexRow)
-	theme.Register(q.resultPane)
+	q.resultPane = core.NewFlex().SetDirection(core.Column)
 	q.resultPane.AddItem(q.emptyState, 0, 1, false)
 	q.resultPane.AddItem(q.statusBar, 1, 0, false)
 
@@ -122,7 +113,7 @@ func newQueryEditor(app *App, initialSQL string) *QueryEditor {
 		SetRatio(0.35).
 		SetResizable(true)
 
-	q.editor.SetChangedFunc(func() {
+	q.editor.SetOnChange(func(_ *components.ChangeEvent[string]) {
 		if q.acDebounce != nil {
 			q.acDebounce.Stop()
 		}
@@ -133,89 +124,113 @@ func newQueryEditor(app *App, initialSQL string) *QueryEditor {
 		})
 	})
 
-	q.editor.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
-		// Escape stops watch mode
-		if event.Key() == tcell.KeyEscape && q.watch != nil && q.watch.running {
-			q.stopWatch()
-			return nil
-		}
-
-		// Schema info overlay: Shift+K
-		if q.schemaOverlay.visible {
-			if event.Key() == tcell.KeyEscape || (event.Rune() == 'K' && event.Modifiers() == tcell.ModNone) {
-				q.schemaOverlay.Hide()
-				return nil
-			}
-			if event.Key() == tcell.KeyUp || event.Key() == tcell.KeyDown {
-				q.schemaOverlay.HandleKey(event)
-				return nil
-			}
-			// Any other key dismisses and passes through
-			q.schemaOverlay.Hide()
-		}
-		if event.Rune() == 'K' && event.Modifiers() == tcell.ModShift {
-			q.showSchemaInfo()
-			return nil
-		}
-
-		// Autocomplete overlay input handling
-		if q.overlay.Visible() {
-			if q.overlay.HandleKey(event) {
-				return nil
-			}
-			// If the key wasn't consumed by overlay, let it pass through
-			// but dismiss overlay on certain keys
-			if event.Key() == tcell.KeyLeft || event.Key() == tcell.KeyRight {
-				q.overlay.Hide()
-			}
-		}
-
-		// Ctrl+R to execute
-		if event.Key() == tcell.KeyCtrlR {
-			q.overlay.Hide()
-			q.suppressAC = true
-			q.executeQuery()
-			return nil
-		}
-		// Ctrl+X to explain
-		if event.Key() == tcell.KeyCtrlX {
-			sql := q.editor.GetText()
-			if sql != "" {
-				q.app.NavigateToExplainView(sql)
-			}
-			return nil
-		}
-		// Ctrl+E to open $EDITOR
-		if event.Key() == tcell.KeyCtrlE {
-			q.openExternalEditor()
-			return nil
-		}
-		// Ctrl+S to save query
-		if event.Key() == tcell.KeyCtrlS {
-			q.saveQuery()
-			return nil
-		}
-		// Tab to switch to results (only when overlay is NOT visible)
-		if event.Key() == tcell.KeyTab {
-			q.overlay.Hide()
-			q.suppressAC = true
-			q.Split.FocusSecond()
-			return nil
-		}
-		return event
-	})
-
 	q.grid.SetOnBack(func() {
-		q.Split.FocusFirst()
+		q.setEditorFocus(true)
 	})
 
 	return q
 }
 
+// setEditorFocus focuses the editor pane (true) or the results pane (false)
+// and keeps app.textEditing in sync so global rune shortcuts don't fire while
+// typing SQL.
+func (q *QueryEditor) setEditorFocus(editor bool) {
+	if editor {
+		q.Split.FocusFirst()
+		q.grid.Blur()
+		q.editor.Focus()
+	} else {
+		q.Split.FocusSecond()
+		q.editor.Blur()
+		q.grid.Focus()
+	}
+	q.app.textEditing = editor
+}
+
+// HandleKey routes keyboard input. When the editor pane is focused it runs the
+// editor-specific bindings (overlay, schema info, execute, etc.); otherwise the
+// event is delegated to the Split (which forwards to the results pane).
+func (q *QueryEditor) HandleKey(event *tcell.EventKey) bool {
+	if q.Split.FocusedPane() != 0 {
+		// Results pane focused. Tab switches back to the editor; everything
+		// else goes to the data grid.
+		if event.Key() == tcell.KeyTab {
+			q.setEditorFocus(true)
+			return true
+		}
+		return q.grid.HandleKey(event)
+	}
+
+	// Escape stops watch mode
+	if event.Key() == tcell.KeyEscape && q.watch != nil && q.watch.running {
+		q.stopWatch()
+		return true
+	}
+
+	// Schema info overlay: Shift+K
+	if q.schemaOverlay.visible {
+		if event.Key() == tcell.KeyEscape || (event.Rune() == 'K' && event.Modifiers() == tcell.ModNone) {
+			q.schemaOverlay.Hide()
+			return true
+		}
+		if event.Key() == tcell.KeyUp || event.Key() == tcell.KeyDown {
+			q.schemaOverlay.HandleKey(event)
+			return true
+		}
+		// Any other key dismisses and passes through
+		q.schemaOverlay.Hide()
+	}
+	if event.Rune() == 'K' && event.Modifiers() == tcell.ModShift {
+		q.showSchemaInfo()
+		return true
+	}
+
+	// Autocomplete overlay input handling
+	if q.overlay.Visible() {
+		if q.overlay.HandleKey(event) {
+			return true
+		}
+		// If the key wasn't consumed by overlay, let it pass through
+		// but dismiss overlay on certain keys
+		if event.Key() == tcell.KeyLeft || event.Key() == tcell.KeyRight {
+			q.overlay.Hide()
+		}
+	}
+
+	switch event.Key() {
+	case tcell.KeyCtrlR:
+		q.overlay.Hide()
+		q.suppressAC = true
+		q.executeQuery()
+		return true
+	case tcell.KeyCtrlX:
+		sql := q.editor.GetText()
+		if sql != "" {
+			q.app.NavigateToExplainView(sql)
+		}
+		return true
+	case tcell.KeyCtrlE:
+		q.openExternalEditor()
+		return true
+	case tcell.KeyCtrlS:
+		q.saveQuery()
+		return true
+	case tcell.KeyTab:
+		// Switch to results pane (only when overlay is NOT visible).
+		q.overlay.Hide()
+		q.suppressAC = true
+		q.setEditorFocus(false)
+		return true
+	}
+
+	// Default: forward typing/navigation to the editor itself.
+	return q.editor.HandleKey(event)
+}
+
 func (q *QueryEditor) Name() string { return "Query Editor" }
 
 func (q *QueryEditor) Start() {
-	q.Split.FocusFirst()
+	q.setEditorFocus(true)
 	if q.editor.GetText() != "" {
 		q.executeQuery()
 	}
@@ -268,38 +283,9 @@ func (q *QueryEditor) executeQuery() {
 	q.lastSQL = sql
 	q.statusBar.SetText(fmt.Sprintf(" [yellow]Executing...[-]"))
 
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-		defer cancel()
-
-		start := time.Now()
-		result, err := provider.ExecuteQuery(ctx, sql)
-		elapsed := time.Since(start)
-
-		// Record to history
-		if q.app.History() != nil {
-			entry := HistoryEntry{
-				Query:    sql,
-				Duration: elapsed,
-				Time:     start,
-			}
-			if err != nil {
-				entry.Error = err.Error()
-			} else {
-				entry.RowCount = result.RowCount
-			}
-			q.app.History().Add(entry)
-		}
-
-		if err != nil {
-			q.app.QueueUpdateDraw(func() {
-				q.statusBar.SetText(fmt.Sprintf(" [red]Error: %v[-]", err))
-				q.app.ShowError(fmt.Sprintf("Query error: %v", err))
-			})
-			return
-		}
-
-		q.app.QueueUpdateDraw(func() {
+	async.NewLoader[*engine.QueryResult]().
+		WithTimeout(60 * time.Second).
+		OnSuccess(func(result *engine.QueryResult) {
 			// Store result for piping
 			q.lastResultCols = result.Columns
 			q.lastResultRows = result.Rows
@@ -321,9 +307,37 @@ func (q *QueryEditor) executeQuery() {
 				q.statusBar.SetText(fmt.Sprintf(" [green]OK[-] [%s](%s)[-]",
 					theme.TagFgDim(), result.Duration))
 			}
-			q.Split.FocusSecond()
+			q.setEditorFocus(false)
+		}).
+		OnError(func(err error) {
+			q.statusBar.SetText(fmt.Sprintf(" [red]Error: %v[-]", err))
+			q.app.ShowError(fmt.Sprintf("Query error: %v", err))
+		}).
+		Run(func(ctx context.Context) (*engine.QueryResult, error) {
+			start := time.Now()
+			result, err := provider.ExecuteQuery(ctx, sql)
+			elapsed := time.Since(start)
+
+			// Record to history
+			if q.app.History() != nil {
+				entry := HistoryEntry{
+					Query:    sql,
+					Duration: elapsed,
+					Time:     start,
+				}
+				if err != nil {
+					entry.Error = err.Error()
+				} else {
+					entry.RowCount = result.RowCount
+				}
+				q.app.History().Add(entry)
+			}
+
+			if err != nil {
+				return nil, err
+			}
+			return result, nil
 		})
-	}()
 }
 
 func (q *QueryEditor) openExternalEditor() {
@@ -416,30 +430,34 @@ func (q *QueryEditor) saveQuery() {
 		return
 	}
 
-	// Simple inline save — prompt for name via command bar approach
-	input := tview.NewInputField()
-	input.SetLabel("Query name: ")
-	input.SetFieldWidth(40)
-	input.SetDoneFunc(func(key tcell.Key) {
-		if key == tcell.KeyEnter {
-			name := input.GetText()
+	// Simple inline save — prompt for a name with a single-field form.
+	form := components.NewFormBuilder().
+		Text("name", "Query name").
+		Placeholder("my-query").
+		Done().
+		OnSubmit(func(values map[string]any) {
+			name, _ := values["name"].(string)
 			if name != "" {
 				profileName := q.app.ActiveProfileName()
 				q.app.Config().SavedQueryForProfile(profileName, name, sql)
 				go q.app.Config().Save()
 				q.app.ShowSuccess(fmt.Sprintf("Saved query: %s", name))
 			}
-		}
-		q.app.app.Pages().Pop()
-	})
+			q.app.app.Pages().Pop()
+		}).
+		OnCancel(func() {
+			q.app.app.Pages().Pop()
+		}).
+		Build()
 
 	modal := components.NewModal(components.ModalConfig{
 		Title:  "Save Query",
 		Width:  50,
-		Height: 5,
-	}).SetContent(input)
+		Height: 6,
+	}).SetContent(form)
 
 	q.app.app.Pages().Push(modal)
+	q.app.app.SetFocus(form)
 }
 
 // showGrid swaps the empty state for the data grid in the result pane.

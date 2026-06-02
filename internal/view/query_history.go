@@ -6,11 +6,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/atterpac/jig/components"
-	"github.com/atterpac/jig/nav"
-	"github.com/atterpac/jig/theme"
+	"github.com/atterpac/dado/components"
+	"github.com/atterpac/dado/core"
+	"github.com/atterpac/dado/nav"
+	"github.com/atterpac/dado/theme"
 	"github.com/gdamore/tcell/v2"
-	"github.com/rivo/tview"
 )
 
 // HistoryEntry represents a single query execution record.
@@ -59,8 +59,8 @@ func (s *QueryHistoryStore) Entries() []HistoryEntry {
 type QueryHistory struct {
 	*components.MasterDetailView
 	app          *App
-	historyTable *tview.Table
-	preview      *tview.TextView
+	historyTable *core.Table
+	preview      *core.TextView
 	entries      []HistoryEntry
 	filtered     []HistoryEntry
 	searchQuery  string
@@ -69,8 +69,8 @@ type QueryHistory struct {
 func NewQueryHistory(app *App) *QueryHistory {
 	q := &QueryHistory{
 		app:          app,
-		historyTable: tview.NewTable(),
-		preview:      tview.NewTextView(),
+		historyTable: core.NewTable(),
+		preview:      core.NewTextView(),
 	}
 
 	q.historyTable.SetSelectable(true, false)
@@ -78,11 +78,9 @@ func NewQueryHistory(app *App) *QueryHistory {
 	q.historyTable.SetSelectedStyle(tcell.StyleDefault.
 		Foreground(tcell.ColorWhite).
 		Background(tcell.ColorDarkCyan))
-	theme.Register(q.historyTable)
 
 	q.preview.SetDynamicColors(true)
 	q.preview.SetWordWrap(true)
-	theme.Register(q.preview)
 
 	q.MasterDetailView = components.NewMasterDetailView().
 		SetMasterTitle("Query History").
@@ -116,43 +114,6 @@ func NewQueryHistory(app *App) *QueryHistory {
 		q.onSelectionChanged(row)
 	})
 
-	q.historyTable.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
-		if q.MasterDetailView.HandleSearchKey(event) {
-			return nil
-		}
-
-		switch event.Rune() {
-		case 'j':
-			row, _ := q.historyTable.GetSelection()
-			if row < q.historyTable.GetRowCount()-1 {
-				q.historyTable.Select(row+1, 0)
-			}
-			return nil
-		case 'k':
-			row, _ := q.historyTable.GetSelection()
-			if row > 1 {
-				q.historyTable.Select(row-1, 0)
-			}
-			return nil
-		case 'g':
-			q.historyTable.Select(1, 0)
-			return nil
-		case 'G':
-			q.historyTable.Select(q.historyTable.GetRowCount()-1, 0)
-			return nil
-		case 's':
-			q.saveSelected()
-			return nil
-		}
-
-		if event.Key() == tcell.KeyEnter {
-			q.openSelected()
-			return nil
-		}
-
-		return event
-	})
-
 	return q
 }
 
@@ -165,6 +126,44 @@ func (q *QueryHistory) Start() {
 
 func (q *QueryHistory) Stop() {
 	q.MasterDetailView.Stop()
+}
+
+// HandleKey routes keyboard events. Returns true if the key was consumed.
+func (q *QueryHistory) HandleKey(ev *tcell.EventKey) bool {
+	if q.MasterDetailView.HandleSearchKey(ev) {
+		return true
+	}
+
+	switch ev.Rune() {
+	case 'j':
+		row, _ := q.historyTable.GetSelection()
+		if row < q.historyTable.GetRowCount()-1 {
+			q.historyTable.Select(row+1, 0)
+		}
+		return true
+	case 'k':
+		row, _ := q.historyTable.GetSelection()
+		if row > 1 {
+			q.historyTable.Select(row-1, 0)
+		}
+		return true
+	case 'g':
+		q.historyTable.Select(1, 0)
+		return true
+	case 'G':
+		q.historyTable.Select(q.historyTable.GetRowCount()-1, 0)
+		return true
+	case 's':
+		q.saveSelected()
+		return true
+	}
+
+	if ev.Key() == tcell.KeyEnter {
+		q.openSelected()
+		return true
+	}
+
+	return q.historyTable.HandleKey(ev)
 }
 
 func (q *QueryHistory) loadHistory() {
@@ -193,10 +192,10 @@ func (q *QueryHistory) applyFilter() {
 func (q *QueryHistory) renderHistory() {
 	q.historyTable.Clear()
 
-	headerStyle := tcell.StyleDefault.Bold(true).Foreground(theme.Get().Accent())
-	q.historyTable.SetCell(0, 0, tview.NewTableCell("Time").SetStyle(headerStyle).SetSelectable(false))
-	q.historyTable.SetCell(0, 1, tview.NewTableCell("Duration").SetStyle(headerStyle).SetSelectable(false))
-	q.historyTable.SetCell(0, 2, tview.NewTableCell("Query").SetStyle(headerStyle).SetSelectable(false))
+	accentColor := theme.Accent()
+	q.historyTable.SetCell(0, 0, core.NewTableCell("Time").SetTextColor(accentColor).SetSelectable(false))
+	q.historyTable.SetCell(0, 1, core.NewTableCell("Duration").SetTextColor(accentColor).SetSelectable(false))
+	q.historyTable.SetCell(0, 2, core.NewTableCell("Query").SetTextColor(accentColor).SetSelectable(false))
 
 	for i, entry := range q.filtered {
 		timeStr := entry.Time.Format("15:04:05")
@@ -208,9 +207,9 @@ func (q *QueryHistory) renderHistory() {
 			statusColor = tcell.ColorRed
 		}
 
-		q.historyTable.SetCell(i+1, 0, tview.NewTableCell(timeStr).SetTextColor(tcell.ColorGray))
-		q.historyTable.SetCell(i+1, 1, tview.NewTableCell(durStr).SetTextColor(statusColor))
-		q.historyTable.SetCell(i+1, 2, tview.NewTableCell(queryPreview))
+		q.historyTable.SetCell(i+1, 0, core.NewTableCell(timeStr).SetTextColor(tcell.ColorGray))
+		q.historyTable.SetCell(i+1, 1, core.NewTableCell(durStr).SetTextColor(statusColor))
+		q.historyTable.SetCell(i+1, 2, core.NewTableCell(queryPreview))
 	}
 
 	if len(q.filtered) > 0 {
@@ -267,18 +266,16 @@ func (q *QueryHistory) saveSelected() {
 		return
 	}
 
-	input := tview.NewInputField()
+	input := components.NewTextField("query-name")
 	input.SetLabel("Query name: ")
-	input.SetFieldWidth(40)
-	input.SetDoneFunc(func(key tcell.Key) {
-		if key == tcell.KeyEnter {
-			name := input.GetText()
-			if name != "" {
-				profileName := q.app.ActiveProfileName()
-				q.app.Config().SavedQueryForProfile(profileName, name, entry.Query)
-				go q.app.Config().Save()
-				q.app.ShowSuccess(fmt.Sprintf("Saved: %s", name))
-			}
+	input.SetPlaceholder("Enter a name...")
+	input.SetOnSubmit(func(ev *components.SubmitEvent) {
+		name := input.GetValue()
+		if name != "" {
+			profileName := q.app.ActiveProfileName()
+			q.app.Config().SavedQueryForProfile(profileName, name, entry.Query)
+			go q.app.Config().Save()
+			q.app.ShowSuccess(fmt.Sprintf("Saved: %s", name))
 		}
 		q.app.app.Pages().Pop()
 	})

@@ -7,11 +7,11 @@ import (
 	"os"
 	"time"
 
-	"github.com/atterpac/jig/components"
-	"github.com/atterpac/jig/theme"
-	"github.com/atterpac/jig/theme/themes"
+	"github.com/atterpac/dado/components"
+	"github.com/atterpac/dado/core"
+	"github.com/atterpac/dado/theme"
+	"github.com/atterpac/dado/theme/themes"
 	"github.com/gdamore/tcell/v2"
-	"github.com/rivo/tview"
 
 	"github.com/atterpac/qry/internal/config"
 	"github.com/atterpac/qry/internal/engine"
@@ -156,7 +156,7 @@ func main() {
 }
 
 func connectWithUI(cfg config.ConnectionConfig) (engine.Provider, error) {
-	app := tview.NewApplication()
+	app := core.NewApp()
 
 	splash := components.NewSplash().
 		SetLogo(splashLogo).
@@ -258,7 +258,7 @@ func connectWithUI(cfg config.ConnectionConfig) (engine.Provider, error) {
 		}
 	}()
 
-	app.SetRoot(splash, true)
+	app.SetRoot(splash)
 	if err := app.Run(); err != nil {
 		return nil, err
 	}

@@ -6,11 +6,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/atterpac/jig/components"
-	"github.com/atterpac/jig/nav"
-	"github.com/atterpac/jig/theme"
+	"github.com/atterpac/dado/async"
+	"github.com/atterpac/dado/components"
+	"github.com/atterpac/dado/core"
+	"github.com/atterpac/dado/nav"
+	"github.com/atterpac/dado/theme"
 	"github.com/gdamore/tcell/v2"
-	"github.com/rivo/tview"
 
 	"github.com/atterpac/qry/internal/engine"
 )
@@ -18,11 +19,12 @@ import (
 // ExplainView displays a query execution plan as an interactive tree.
 type ExplainView struct {
 	*components.Split
-	app        *App
-	sql        string
-	tree       *components.Tree
-	detailView *tview.TextView
-	plan       *engine.PlanResult
+	app         *App
+	sql         string
+	tree        *components.Tree
+	detailPanel *components.Panel
+	detailView  *core.TextView
+	plan        *engine.PlanResult
 }
 
 func NewExplainView(app *App, sql string) *ExplainView {
@@ -35,14 +37,14 @@ func NewExplainView(app *App, sql string) *ExplainView {
 		SetShowLines(true).
 		SetShowIcons(true)
 
-	e.detailView = tview.NewTextView()
+	e.detailView = core.NewTextView()
 	e.detailView.SetDynamicColors(true)
 	e.detailView.SetScrollable(true)
 	e.detailView.SetWordWrap(true)
-	e.detailView.SetBorder(true)
-	e.detailView.SetTitle(" Details ")
-	e.detailView.SetTitleAlign(tview.AlignLeft)
-	theme.Register(e.detailView)
+	e.detailPanel = components.NewPanel().
+		SetTitle("Details").
+		SetTitleAlign(components.TitleAlignLeft).
+		SetContent(e.detailView)
 
 	e.tree.SetOnHighlight(func(node *components.TreeNode) {
 		if node != nil && node.Data != nil {
@@ -63,27 +65,27 @@ func NewExplainView(app *App, sql string) *ExplainView {
 	e.Split = components.NewSplit().
 		SetDirection(components.SplitHorizontal).
 		SetTop(e.tree).
-		SetBottom(e.detailView).
+		SetBottom(e.detailPanel).
 		SetRatio(0.6).
 		SetResizable(true)
-
-	// Add keybindings
-	e.tree.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
-		switch {
-		case event.Rune() == 'r':
-			e.reload()
-			return nil
-		case event.Rune() == '/':
-			e.showFilter()
-			return nil
-		}
-		return event
-	})
 
 	return e
 }
 
 func (e *ExplainView) Name() string { return "Explain" }
+
+// HandleKey intercepts 'r' (reload) and '/' (filter) before delegating to Split.
+func (e *ExplainView) HandleKey(ev *tcell.EventKey) bool {
+	switch ev.Rune() {
+	case 'r':
+		e.reload()
+		return true
+	case '/':
+		e.showFilter()
+		return true
+	}
+	return e.Split.HandleKey(ev)
+}
 
 func (e *ExplainView) Start() {
 	e.loadPlan()
@@ -108,28 +110,23 @@ func (e *ExplainView) loadPlan() {
 		return
 	}
 
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-
-		plan, err := engine.ExplainQuery(ctx, provider, e.sql)
-		if err != nil {
-			e.app.QueueUpdateDraw(func() {
-				e.app.ShowError(fmt.Sprintf("Explain failed: %v", err))
-				e.showRawFallback(fmt.Sprintf("Error: %v", err))
-			})
-			return
-		}
-
-		e.app.QueueUpdateDraw(func() {
+	async.NewLoader[*engine.PlanResult]().
+		WithTimeout(30 * time.Second).
+		OnSuccess(func(plan *engine.PlanResult) {
 			e.plan = plan
 			if plan.Root != nil {
 				e.buildTree(plan)
 			} else {
 				e.showRawFallback(plan.RawText)
 			}
+		}).
+		OnError(func(err error) {
+			e.app.ShowError(fmt.Sprintf("Explain failed: %v", err))
+			e.showRawFallback(fmt.Sprintf("Error: %v", err))
+		}).
+		Run(func(ctx context.Context) (*engine.PlanResult, error) {
+			return engine.ExplainQuery(ctx, provider, e.sql)
 		})
-	}()
 }
 
 func (e *ExplainView) buildTree(plan *engine.PlanResult) {
@@ -271,7 +268,7 @@ func (e *ExplainView) updateDetail(pn *engine.PlanNode) {
 	}
 
 	e.detailView.SetText(b.String())
-	e.detailView.ScrollToBeginning()
+	e.detailView.ScrollTo(0, 0)
 }
 
 func (e *ExplainView) showRawFallback(text string) {

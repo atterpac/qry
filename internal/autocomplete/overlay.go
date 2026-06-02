@@ -1,7 +1,7 @@
 package autocomplete
 
 import (
-	"github.com/atterpac/jig/theme"
+	"github.com/atterpac/dado/theme"
 	"github.com/gdamore/tcell/v2"
 )
 

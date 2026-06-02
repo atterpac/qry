@@ -6,31 +6,37 @@ import (
 	"strings"
 	"time"
 
-	"github.com/atterpac/jig/components"
-	"github.com/atterpac/jig/nav"
-	"github.com/atterpac/jig/theme"
-	"github.com/rivo/tview"
+	"github.com/atterpac/dado/async"
+	"github.com/atterpac/dado/components"
+	"github.com/atterpac/dado/core"
+	"github.com/atterpac/dado/nav"
+	"github.com/atterpac/dado/theme"
+
+	"github.com/atterpac/qry/internal/engine"
 )
 
 // ConnectionInfo shows server version, capabilities, and connection details.
 type ConnectionInfo struct {
-	*tview.TextView
-	app *App
+	*components.Panel
+	text *core.TextView
+	app  *App
 }
 
 func NewConnectionInfo(app *App) *ConnectionInfo {
+	tv := core.NewTextView()
+	tv.SetDynamicColors(true)
+	tv.SetWordWrap(true)
 	c := &ConnectionInfo{
-		TextView: tview.NewTextView(),
-		app:      app,
+		Panel: components.NewPanel(),
+		text:  tv,
+		app:   app,
 	}
-	c.SetDynamicColors(true)
-	c.SetWordWrap(true)
-	c.SetBorder(true)
-	c.SetTitle(" Connection Info ")
-	c.SetTitleAlign(tview.AlignLeft)
-	theme.Register(c.TextView)
+	c.Panel.SetTitle("Connection Info").SetTitleAlign(components.TitleAlignLeft)
+	c.Panel.SetContent(tv)
 	return c
 }
+
+func (c *ConnectionInfo) SetText(s string) { c.text.SetText(s) }
 
 func (c *ConnectionInfo) Name() string { return "Connection Info" }
 
@@ -53,15 +59,18 @@ func (c *ConnectionInfo) loadInfo() {
 		return
 	}
 
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
+	type connInfo struct {
+		version string
+		vErr    error
+		pErr    error
+		caps    engine.EngineCapabilities
+	}
 
-		version, vErr := provider.ServerVersion(ctx)
-		pErr := provider.Ping(ctx)
-		caps := provider.Capabilities()
+	async.NewLoader[connInfo]().
+		WithTimeout(5 * time.Second).
+		OnSuccess(func(info connInfo) {
+			version, vErr, pErr, caps := info.version, info.vErr, info.pErr, info.caps
 
-		c.app.QueueUpdateDraw(func() {
 			var b strings.Builder
 
 			fmt.Fprintf(&b, "[::b]Engine[::-]       %s\n", provider.EngineType())
@@ -110,8 +119,16 @@ func (c *ConnectionInfo) loadInfo() {
 			fmt.Fprintf(&b, "  Identifier:   [%s]%s[-]\n", dim, caps.IdentifierQuote)
 
 			c.SetText(b.String())
+		}).
+		OnError(func(err error) {
+			c.SetText(fmt.Sprintf("[red]error: %v[-]", err))
+		}).
+		Run(func(ctx context.Context) (connInfo, error) {
+			version, vErr := provider.ServerVersion(ctx)
+			pErr := provider.Ping(ctx)
+			caps := provider.Capabilities()
+			return connInfo{version: version, vErr: vErr, pErr: pErr, caps: caps}, nil
 		})
-	}()
 }
 
 func boolTag(v bool) string {

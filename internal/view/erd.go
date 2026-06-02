@@ -7,17 +7,16 @@ import (
 	"time"
 
 	"github.com/gdamore/tcell/v2"
-	"github.com/rivo/tview"
 
-	"github.com/atterpac/jig/components"
-	"github.com/atterpac/jig/nav"
+	"github.com/atterpac/dado/components"
+	"github.com/atterpac/dado/nav"
 )
 
 // ErdView displays an ERD (Entity Relationship Diagram) for the current schema.
 type ErdView struct {
-	erdGraph *components.ERDGraph
-	app      *App
-	schema   string
+	*components.ERDGraph
+	app    *App
+	schema string
 
 	mu      sync.Mutex
 	loading bool
@@ -26,12 +25,12 @@ type ErdView struct {
 // NewErdView creates a new ErdView for the given schema.
 func NewErdView(app *App, schema string) *ErdView {
 	v := &ErdView{
-		erdGraph: components.NewERDGraph(),
+		ERDGraph: components.NewERDGraph(),
 		app:      app,
 		schema:   schema,
 	}
 
-	v.erdGraph.SetOnSelect(func(t *components.ERDTable) {
+	v.ERDGraph.SetOnSelect(func(t *components.ERDTable) {
 		if t != nil {
 			v.app.NavigateToTableData(v.schema, t.Name)
 		}
@@ -203,26 +202,20 @@ func (v *ErdView) loadSchema() {
 		}
 
 		v.app.QueueUpdateDraw(func() {
-			v.erdGraph.SetData(erdTables, erdRelations)
+			v.ERDGraph.SetData(erdTables, erdRelations)
 		})
 	}()
 }
 
-// tview.Primitive delegation
-
-func (v *ErdView) Draw(screen tcell.Screen)        { v.erdGraph.Draw(screen) }
-func (v *ErdView) GetRect() (int, int, int, int)    { return v.erdGraph.GetRect() }
-func (v *ErdView) SetRect(x, y, width, height int)  { v.erdGraph.SetRect(x, y, width, height) }
-func (v *ErdView) InputHandler() func(*tcell.EventKey, func(tview.Primitive)) {
-	return func(event *tcell.EventKey, setFocus func(tview.Primitive)) {
-		if event.Key() == tcell.KeyRune && event.Rune() == '/' {
-			v.showSearch()
-			return
-		}
-		if handler := v.erdGraph.InputHandler(); handler != nil {
-			handler(event, setFocus)
-		}
+// HandleKey intercepts `/` to open table search, delegating everything else to
+// the embedded ERDGraph. Draw/SetRect/Blur/HasFocus/HandleMouse are promoted
+// from the embedded *components.ERDGraph.
+func (v *ErdView) HandleKey(ev *tcell.EventKey) bool {
+	if ev.Key() == tcell.KeyRune && ev.Rune() == '/' {
+		v.showSearch()
+		return true
 	}
+	return v.ERDGraph.HandleKey(ev)
 }
 
 func (v *ErdView) showSearch() {
@@ -231,9 +224,9 @@ func (v *ErdView) showSearch() {
 			return
 		}
 		q := strings.ToLower(query)
-		for _, id := range v.erdGraph.TableOrder() {
+		for _, id := range v.ERDGraph.TableOrder() {
 			if strings.Contains(strings.ToLower(id), q) {
-				v.erdGraph.SetFocusedTable(id)
+				v.ERDGraph.SetFocusedTable(id)
 				return
 			}
 		}
@@ -247,12 +240,5 @@ func (v *ErdView) showSearch() {
 		OnCancel: func() {},
 	})
 }
-func (v *ErdView) Focus(delegate func(tview.Primitive)) { v.erdGraph.Focus(delegate) }
-func (v *ErdView) Blur()                                { v.erdGraph.Blur() }
-func (v *ErdView) HasFocus() bool                       { return v.erdGraph.HasFocus() }
-func (v *ErdView) MouseHandler() func(tview.MouseAction, *tcell.EventMouse, func(tview.Primitive)) (bool, tview.Primitive) {
-	return v.erdGraph.MouseHandler()
-}
-func (v *ErdView) PasteHandler() func(string, func(tview.Primitive)) { return nil }
 
 var _ nav.Component = (*ErdView)(nil)

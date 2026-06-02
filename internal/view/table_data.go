@@ -9,13 +9,14 @@ import (
 	"strings"
 	"time"
 
-	"github.com/atterpac/jig/components"
-	"github.com/atterpac/jig/nav"
-	"github.com/atterpac/jig/theme"
+	"github.com/atterpac/dado/async"
+	"github.com/atterpac/dado/components"
+	"github.com/atterpac/dado/core"
+	"github.com/atterpac/dado/nav"
+	"github.com/atterpac/dado/theme"
 	"github.com/gdamore/tcell/v2"
-	"github.com/rivo/tview"
 
-	"github.com/atterpac/qry/internal/clipboard"
+	"github.com/atterpac/dado/clipboard"
 	"github.com/atterpac/qry/internal/config"
 	"github.com/atterpac/qry/internal/engine"
 )
@@ -34,25 +35,25 @@ type PendingInsert struct {
 
 // TableData shows a DataGrid with table contents and inline editing support.
 type TableData struct {
-	*tview.Flex
-	app       *App
-	schema    string
-	table     string
-	grid      *components.DataGrid
-	source    *components.SliceSource
-	columns   []engine.ColumnInfo
-	pkCols    []string
-	resultCols   []string
-	offset       int
-	limit        int
+	*core.Flex
+	app           *App
+	schema        string
+	table         string
+	grid          *components.DataGrid
+	source        *components.SliceSource
+	columns       []engine.ColumnInfo
+	pkCols        []string
+	resultCols    []string
+	offset        int
+	limit         int
 	searchFilter  string
 	searchActive  bool
 	filterFromNav bool // true when filter was set by FK navigation (gd), not user search
-	statusBar    *tview.TextView
-	emptyState     *tview.TextView
-	fkInfo         []engine.ForeignKeyInfo
-	gPressed       bool
-	searchCancel   context.CancelFunc
+	statusBar     *core.TextView
+	emptyState    *core.TextView
+	fkInfo        []engine.ForeignKeyInfo
+	gPressed      bool
+	searchCancel  context.CancelFunc
 
 	// Pending mutations
 	pendingDeletes []PendingDelete
@@ -77,16 +78,14 @@ type TableData struct {
 
 	// Detail panel (row JSON view)
 	detailPanel   *components.Panel
-	detailText    *tview.TextView
+	detailText    *core.TextView
 	detailVisible bool
-	gridFlex      *tview.Flex
+	gridFlex      *core.Flex
 }
 
 func NewTableData(app *App, schema, table string) *TableData {
-	flex := tview.NewFlex()
-	theme.Register(flex)
-	statusBar := tview.NewTextView()
-	theme.Register(statusBar)
+	flex := core.NewFlex()
+	statusBar := core.NewTextView()
 	t := &TableData{
 		Flex:      flex,
 		app:       app,
@@ -104,7 +103,7 @@ func NewTableData(app *App, schema, table string) *TableData {
 
 	// Status bar for changeset info
 	t.statusBar.SetDynamicColors(true)
-	t.statusBar.SetTextAlign(tview.AlignLeft)
+	t.statusBar.SetTextAlign(core.AlignLeft)
 	t.updateStatusBar()
 
 	t.grid.SetOnModeChange(func(mode components.GridMode) {
@@ -144,17 +143,15 @@ func NewTableData(app *App, schema, table string) *TableData {
 	})
 
 	// Detail panel for row JSON view
-	t.detailText = tview.NewTextView()
+	t.detailText = core.NewTextView()
 	t.detailText.SetDynamicColors(true)
 	t.detailText.SetScrollable(true)
 	t.detailText.SetWordWrap(true)
-	theme.Register(t.detailText)
 	t.detailPanel = components.NewPanel().SetTitle("Row Detail").SetContent(t.detailText)
 
 	// Inner flex to hold grid + statusBar as a row group
-	t.gridFlex = tview.NewFlex()
-	t.gridFlex.SetDirection(tview.FlexRow)
-	theme.Register(t.gridFlex)
+	t.gridFlex = core.NewFlex()
+	t.gridFlex.SetDirection(core.Column)
 
 	t.grid.SetOnCursorMove(func(pos components.CellPosition) {
 		if t.detailVisible {
@@ -170,135 +167,136 @@ func NewTableData(app *App, schema, table string) *TableData {
 		}
 	})
 
-	t.grid.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
-		// When grid is in edit mode, skip all table keybinds so the DataGrid
-		// can handle text input, Escape (cancel), and Enter (confirm).
-		if app.gridEditing {
-			return event
-		}
-
-		if event.Key() == tcell.KeyEscape && t.searchActive && !t.filterFromNav {
-			if t.searchCancel != nil {
-				t.searchCancel()
-			}
-			t.app.statusBar.ExitCommandMode()
-			t.searchFilter = ""
-			t.searchActive = false
-			app.gridSearching = false
-			t.offset = 0
-			t.loadData()
-			return nil
-		}
-
-		// Handle gd sequence for FK traversal
-		if t.gPressed {
-			t.gPressed = false
-			if event.Rune() == 'd' {
-				t.followFK()
-				return nil
-			}
-			return event
-		}
-
-		// Handle dd sequence for delete
-		if t.dPressed {
-			t.dPressed = false
-			if event.Rune() == 'd' {
-				t.deleteRows()
-				return nil
-			}
-			return event
-		}
-
-		// Handle yy/yp sequences
-		if t.yPressed {
-			t.yPressed = false
-			if t.yankTimer != nil {
-				t.yankTimer.Stop()
-				t.yankTimer = nil
-			}
-			switch event.Rune() {
-			case 'y':
-				t.yankRow()
-				return nil
-			case 'p':
-				t.pasteRow()
-				return nil
-			}
-			return event
-		}
-
-		if event.Rune() == 'g' {
-			t.gPressed = true
-			return event // let DataGrid handle gg
-		}
-
-		// Ctrl key combinations
-		switch event.Key() {
-		case tcell.KeyCtrlY:
-			t.copyRowAsInsert()
-			return nil
-		case tcell.KeyCtrlE:
-			t.showExportPicker()
-			return nil
-		}
-
-		switch event.Rune() {
-		case 'n':
-			t.nextPage()
-			return nil
-		case 'N':
-			t.prevPage()
-			return nil
-		case 'd':
-			t.dPressed = true
-			return nil
-		case 'y':
-			t.yPressed = true
-			t.yankTimer = time.AfterFunc(200*time.Millisecond, func() {
-				app.QueueUpdateDraw(func() {
-					if t.yPressed {
-						t.yPressed = false
-						t.yankCell()
-					}
-				})
-			})
-			return nil
-		case 'o', 'O':
-			t.showInsertForm()
-			return nil
-		case '.':
-			t.repeatLastEdit()
-			return nil
-		case 'p':
-			t.toggleDetailPanel()
-			return nil
-		case 'W':
-			t.showCellDetail()
-			return nil
-		case 'm':
-			t.saveBookmark()
-			return nil
-		case '\'':
-			t.showBookmarkPicker()
-			return nil
-		}
-		return event
-	})
-
-	t.emptyState = tview.NewTextView()
+	t.emptyState = core.NewTextView()
 	t.emptyState.SetDynamicColors(true)
-	t.emptyState.SetTextAlign(tview.AlignCenter)
-	t.emptyState.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
-		// Pass all keys through so global handlers (q, Esc, P, etc.) work
-		return event
-	})
-	theme.Register(t.emptyState)
+	t.emptyState.SetTextAlign(core.AlignCenter)
 
 	// Initial layout (will be rebuilt by setGridData / rebuildLayout)
 	t.rebuildLayout(false)
 
 	return t
+}
+
+// HandleKey implements the page-level key routing for the table view. It
+// replaces the old t.grid.SetInputCapture: where the capture returned nil
+// (consumed) we return true; where it returned the event (not consumed) we
+// fall through to the DataGrid's own HandleKey.
+func (t *TableData) HandleKey(event *tcell.EventKey) bool {
+	app := t.app
+
+	// When grid is in edit mode, skip all table keybinds so the DataGrid
+	// can handle text input, Escape (cancel), and Enter (confirm).
+	if app.gridEditing {
+		return t.grid.HandleKey(event)
+	}
+
+	if event.Key() == tcell.KeyEscape && t.searchActive && !t.filterFromNav {
+		if t.searchCancel != nil {
+			t.searchCancel()
+		}
+		t.app.statusBar.ExitCommandMode()
+		t.searchFilter = ""
+		t.searchActive = false
+		app.gridSearching = false
+		t.offset = 0
+		t.loadData()
+		return true
+	}
+
+	// Handle gd sequence for FK traversal
+	if t.gPressed {
+		t.gPressed = false
+		if event.Rune() == 'd' {
+			t.followFK()
+			return true
+		}
+		return t.grid.HandleKey(event)
+	}
+
+	// Handle dd sequence for delete
+	if t.dPressed {
+		t.dPressed = false
+		if event.Rune() == 'd' {
+			t.deleteRows()
+			return true
+		}
+		return t.grid.HandleKey(event)
+	}
+
+	// Handle yy/yp sequences
+	if t.yPressed {
+		t.yPressed = false
+		if t.yankTimer != nil {
+			t.yankTimer.Stop()
+			t.yankTimer = nil
+		}
+		switch event.Rune() {
+		case 'y':
+			t.yankRow()
+			return true
+		case 'p':
+			t.pasteRow()
+			return true
+		}
+		return t.grid.HandleKey(event)
+	}
+
+	if event.Rune() == 'g' {
+		t.gPressed = true
+		return t.grid.HandleKey(event) // let DataGrid handle gg
+	}
+
+	// Ctrl key combinations
+	switch event.Key() {
+	case tcell.KeyCtrlY:
+		t.copyRowAsInsert()
+		return true
+	case tcell.KeyCtrlE:
+		t.showExportPicker()
+		return true
+	}
+
+	switch event.Rune() {
+	case 'n':
+		t.nextPage()
+		return true
+	case 'N':
+		t.prevPage()
+		return true
+	case 'd':
+		t.dPressed = true
+		return true
+	case 'y':
+		t.yPressed = true
+		t.yankTimer = time.AfterFunc(200*time.Millisecond, func() {
+			app.QueueUpdateDraw(func() {
+				if t.yPressed {
+					t.yPressed = false
+					t.yankCell()
+				}
+			})
+		})
+		return true
+	case 'o', 'O':
+		t.showInsertForm()
+		return true
+	case '.':
+		t.repeatLastEdit()
+		return true
+	case 'p':
+		t.toggleDetailPanel()
+		return true
+	case 'W':
+		t.showCellDetail()
+		return true
+	case 'm':
+		t.saveBookmark()
+		return true
+	case '\'':
+		t.showBookmarkPicker()
+		return true
+	}
+	return t.grid.HandleKey(event)
 }
 
 func (t *TableData) Name() string { return t.table }
@@ -380,69 +378,73 @@ func (t *TableData) loadData() {
 		return
 	}
 
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
+	type loadResult struct {
+		columns []engine.ColumnInfo
+		pkCols  []string
+		fkInfo  []engine.ForeignKeyInfo
+		result  *engine.QueryResult
+	}
 
-		// Get column info for PK detection
-		columns, err := provider.DescribeTable(ctx, t.schema, t.table)
-		if err != nil {
-			t.app.QueueUpdateDraw(func() {
-				t.app.ShowError(fmt.Sprintf("Describe table failed: %v", err))
-			})
-			return
-		}
-
-		// Extract PK columns
-		var pkCols []string
-		for _, col := range columns {
-			if col.IsPrimaryKey {
-				pkCols = append(pkCols, col.Name)
+	async.NewLoader[loadResult]().
+		WithTimeout(30 * time.Second).
+		OnSuccess(func(lr loadResult) {
+			t.columns = lr.columns
+			t.pkCols = lr.pkCols
+			t.fkInfo = lr.fkInfo
+			t.setGridData(lr.result)
+		}).
+		OnError(func(err error) {
+			t.app.ShowError(err.Error())
+		}).
+		Run(func(ctx context.Context) (loadResult, error) {
+			// Get column info for PK detection
+			columns, err := provider.DescribeTable(ctx, t.schema, t.table)
+			if err != nil {
+				return loadResult{}, fmt.Errorf("Describe table failed: %w", err)
 			}
-		}
 
-		// Build SELECT query
-		tableName := provider.QuoteIdentifier(t.table)
-		if t.schema != "" {
-			caps := provider.Capabilities()
-			if caps.HasSchemas {
-				tableName = provider.QuoteIdentifier(t.schema) + "." + tableName
+			// Extract PK columns
+			var pkCols []string
+			for _, col := range columns {
+				if col.IsPrimaryKey {
+					pkCols = append(pkCols, col.Name)
+				}
 			}
-		}
 
-		query := fmt.Sprintf("SELECT * FROM %s", tableName)
-		if t.searchActive && t.searchFilter != "" {
-			var colNames []string
-			for _, c := range columns {
-				colNames = append(colNames, c.Name)
+			// Build SELECT query
+			tableName := provider.QuoteIdentifier(t.table)
+			if t.schema != "" {
+				caps := provider.Capabilities()
+				if caps.HasSchemas {
+					tableName = provider.QuoteIdentifier(t.schema) + "." + tableName
+				}
 			}
-			filters := engine.ParseSearchInput(t.searchFilter, colNames)
-			if clause := provider.BuildSearchClause(colNames, filters); clause != "" {
-				query += " WHERE " + clause
+
+			query := fmt.Sprintf("SELECT * FROM %s", tableName)
+			if t.searchActive && t.searchFilter != "" {
+				var colNames []string
+				for _, c := range columns {
+					colNames = append(colNames, c.Name)
+				}
+				filters := engine.ParseSearchInput(t.searchFilter, colNames)
+				if clause := provider.BuildSearchClause(colNames, filters); clause != "" {
+					query += " WHERE " + clause
+				}
 			}
-		}
-		if t.sortColumn != "" {
-			query += fmt.Sprintf(" ORDER BY %s %s", provider.QuoteIdentifier(t.sortColumn), t.sortDir)
-		}
-		query += fmt.Sprintf(" LIMIT %d OFFSET %d", t.limit, t.offset)
-		result, err := provider.ExecuteQuery(ctx, query)
-		if err != nil {
-			t.app.QueueUpdateDraw(func() {
-				t.app.ShowError(fmt.Sprintf("Query failed: %v", err))
-			})
-			return
-		}
+			if t.sortColumn != "" {
+				query += fmt.Sprintf(" ORDER BY %s %s", provider.QuoteIdentifier(t.sortColumn), t.sortDir)
+			}
+			query += fmt.Sprintf(" LIMIT %d OFFSET %d", t.limit, t.offset)
+			result, err := provider.ExecuteQuery(ctx, query)
+			if err != nil {
+				return loadResult{}, fmt.Errorf("Query failed: %w", err)
+			}
 
-		// Fetch FK info (non-critical, ignore errors)
-		fkInfo, _ := provider.GetForeignKeys(ctx, t.schema, t.table)
+			// Fetch FK info (non-critical, ignore errors)
+			fkInfo, _ := provider.GetForeignKeys(ctx, t.schema, t.table)
 
-		t.app.QueueUpdateDraw(func() {
-			t.columns = columns
-			t.pkCols = pkCols
-			t.fkInfo = fkInfo
-			t.setGridData(result)
+			return loadResult{columns: columns, pkCols: pkCols, fkInfo: fkInfo, result: result}, nil
 		})
-	}()
 }
 
 func (t *TableData) setGridData(result *engine.QueryResult) {
@@ -462,11 +464,12 @@ func (t *TableData) setGridData(result *engine.QueryResult) {
 		t.emptyState.SetText(msg)
 	}
 	t.rebuildLayout(showEmpty)
-	if showEmpty {
-		t.app.app.SetFocus(t.emptyState)
-	} else {
-		t.app.app.SetFocus(t.grid)
-	}
+	t.applyDeletionMarks()
+	// Keyboard focus stays on the page stack; TableData.HandleKey is the page
+	// router and forwards to the grid (incl. i/c/e to enter edit mode). Moving
+	// app focus onto the grid here would bypass TableData.HandleKey entirely
+	// (nav.Pages is not a key-routing Container), killing the table's own
+	// keybinds and breaking inline editing's table-level integration.
 	t.updateStatusBar()
 	if t.detailVisible && !showEmpty {
 		t.updateDetailPanel()
@@ -573,7 +576,7 @@ func (t *TableData) showSearchBar() {
 	})
 
 	t.app.statusBar.EnterCommandMode()
-	t.app.app.SetFocus(t.app.statusBar.GetCommandInput())
+	t.app.app.SetFocus(t.app.statusBar)
 
 	t.app.statusBar.SetOnCommandSubmit(func(text string) {
 		t.app.statusBar.ExitCommandMode()
@@ -679,7 +682,7 @@ func (t *TableData) showFKPicker(fks []engine.ForeignKeyInfo, cellValue string) 
 	modal := components.NewModal(components.ModalConfig{
 		Title:    "Follow Foreign Key",
 		Width:    50,
-		Height:  min(len(fks)+5, 15),
+		Height:   min(len(fks)+5, 15),
 		Backdrop: true,
 	}).SetContent(list).
 		SetHints([]components.KeyHint{
@@ -826,25 +829,25 @@ func quoteValue(v any) string {
 func (t *TableData) showConfirmSQL(statements []string, onConfirm func()) {
 	preview := strings.Join(statements, ";\n\n")
 
-	tv := tview.NewTextView()
+	tv := core.NewTextView()
 	tv.SetDynamicColors(true)
 	tv.SetWordWrap(true)
+	tv.SetScrollable(true)
 	tv.SetText(fmt.Sprintf("[::b]%d statement(s) to execute:[::-]\n\n%s", len(statements), preview))
 
-	tv.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
-		if event.Key() == tcell.KeyEnter || event.Rune() == 'y' {
+	content := &confirmContent{
+		TextView: tv,
+		onConfirm: func() {
 			t.app.app.Pages().Pop()
 			onConfirm()
-			return nil
-		}
-		return event
-	})
+		},
+	}
 
 	modal := components.NewModal(components.ModalConfig{
 		Title:  "Confirm Changes",
 		Width:  80,
 		Height: min(len(statements)*3+8, 30),
-	}).SetContent(tv)
+	}).SetContent(content)
 
 	t.app.app.Pages().Push(modal)
 }
@@ -1114,9 +1117,10 @@ func (t *TableData) dryRun() {
 			}
 			t.app.ShowInfo("Dry-run complete — all changes rolled back")
 
-			tv := tview.NewTextView()
+			tv := core.NewTextView()
 			tv.SetDynamicColors(true)
 			tv.SetWordWrap(true)
+			tv.SetScrollable(true)
 			tv.SetText(summary)
 
 			modal := components.NewModal(components.ModalConfig{
@@ -1199,8 +1203,19 @@ func (t *TableData) deleteRows() {
 	}
 
 	t.grid.ClearRowSelection()
+	t.applyDeletionMarks()
 	t.updateStatusBar()
 	t.app.ShowInfo(fmt.Sprintf("%d row(s) staged for deletion", len(selected)))
+}
+
+// applyDeletionMarks syncs the grid's deletion highlight with t.pendingDeletes.
+// Called after staging deletes and after every reload (row indices are only
+// valid for the currently loaded page).
+func (t *TableData) applyDeletionMarks() {
+	t.grid.ClearDeletedRows()
+	for _, pd := range t.pendingDeletes {
+		t.grid.SetRowDeleted(pd.RowIndex, true)
+	}
 }
 
 func (t *TableData) showInsertForm() {
@@ -1221,9 +1236,7 @@ func (t *TableData) showInsertForm() {
 }
 
 func (t *TableData) showInsertFormWithValues(editableCols []engine.ColumnInfo, prefill map[string]string) {
-	form := tview.NewForm()
-	theme.Register(form)
-
+	fb := components.NewFormBuilder()
 	for _, col := range editableCols {
 		defaultVal := ""
 		if prefill != nil {
@@ -1237,31 +1250,20 @@ func (t *TableData) showInsertFormWithValues(editableCols []engine.ColumnInfo, p
 		if !col.Nullable {
 			label += " *"
 		}
-		form.AddInputField(label, defaultVal, 0, nil, nil)
+		fb = fb.Text(col.Name, label).Value(defaultVal).Done()
 	}
 
-	form.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
-		if event.Key() == tcell.KeyEscape {
-			t.app.app.Pages().Pop()
-			return nil
-		}
-		return event
-	})
-
-	form.AddButton("Submit", func() {
+	form := fb.OnSubmit(func(values map[string]any) {
 		var cols []string
 		var vals []string
-		for i, col := range editableCols {
-			item := form.GetFormItem(i)
-			if input, ok := item.(*tview.InputField); ok {
-				val := input.GetText()
-				if val != "" {
-					cols = append(cols, col.Name)
-					vals = append(vals, val)
-				} else if !col.Nullable {
-					t.app.ShowWarning(fmt.Sprintf("Column %s is required", col.Name))
-					return
-				}
+		for _, col := range editableCols {
+			val, _ := values[col.Name].(string)
+			if val != "" {
+				cols = append(cols, col.Name)
+				vals = append(vals, val)
+			} else if !col.Nullable {
+				t.app.ShowWarning(fmt.Sprintf("Column %s is required", col.Name))
+				return
 			}
 		}
 		t.pendingInserts = append(t.pendingInserts, PendingInsert{
@@ -1271,11 +1273,9 @@ func (t *TableData) showInsertFormWithValues(editableCols []engine.ColumnInfo, p
 		t.app.app.Pages().Pop()
 		t.updateStatusBar()
 		t.app.ShowInfo("Row staged for insert")
-	})
-
-	form.AddButton("Cancel", func() {
+	}).OnCancel(func() {
 		t.app.app.Pages().Pop()
-	})
+	}).Build()
 
 	modal := components.NewModal(components.ModalConfig{
 		Title:    "Insert Row",
@@ -1508,37 +1508,28 @@ func (t *TableData) exportToClipboard(format string) {
 }
 
 func (t *TableData) showExportFilePath(format string) {
-	form := tview.NewForm()
-	theme.Register(form)
-
 	ext := format
 	if format == "sql" {
 		ext = "sql"
 	}
 	defaultPath := fmt.Sprintf("%s.%s", t.table, ext)
 
-	form.AddInputField("File path", defaultPath, 50, nil, nil)
-	form.AddButton("Export", func() {
-		path := form.GetFormItem(0).(*tview.InputField).GetText()
-		output := t.buildExportData(format)
-		if err := os.WriteFile(path, []byte(output), 0644); err != nil {
-			t.app.ShowError(fmt.Sprintf("Write failed: %v", err))
-		} else {
-			t.app.ShowSuccess(fmt.Sprintf("Exported %d rows to %s", t.source.RowCount(), path))
-		}
-		t.app.app.Pages().Pop()
-	})
-	form.AddButton("Cancel", func() {
-		t.app.app.Pages().Pop()
-	})
-
-	form.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
-		if event.Key() == tcell.KeyEscape {
+	form := components.NewFormBuilder().
+		Text("path", "File path").Value(defaultPath).Done().
+		OnSubmit(func(values map[string]any) {
+			path, _ := values["path"].(string)
+			output := t.buildExportData(format)
+			if err := os.WriteFile(path, []byte(output), 0644); err != nil {
+				t.app.ShowError(fmt.Sprintf("Write failed: %v", err))
+			} else {
+				t.app.ShowSuccess(fmt.Sprintf("Exported %d rows to %s", t.source.RowCount(), path))
+			}
 			t.app.app.Pages().Pop()
-			return nil
-		}
-		return event
-	})
+		}).
+		OnCancel(func() {
+			t.app.app.Pages().Pop()
+		}).
+		Build()
 
 	modal := components.NewModal(components.ModalConfig{
 		Title:    "Export to File",
@@ -1575,7 +1566,7 @@ func (t *TableData) showCellDetail() {
 	colName := t.resultCols[pos.Col]
 	value := t.grid.GetCellValue(pos)
 
-	tv := tview.NewTextView()
+	tv := core.NewTextView()
 	tv.SetDynamicColors(true)
 	tv.SetWordWrap(true)
 	tv.SetText(value)
@@ -1609,47 +1600,46 @@ func (t *TableData) runCount() {
 		return
 	}
 
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-
-		tableName := provider.QuoteIdentifier(t.table)
-		if t.schema != "" {
-			caps := provider.Capabilities()
-			if caps.HasSchemas {
-				tableName = provider.QuoteIdentifier(t.schema) + "." + tableName
-			}
-		}
-
-		query := fmt.Sprintf("SELECT COUNT(*) FROM %s", tableName)
-		if t.searchActive && t.searchFilter != "" {
-			var colNames []string
-			for _, c := range t.columns {
-				colNames = append(colNames, c.Name)
-			}
-			filters := engine.ParseSearchInput(t.searchFilter, colNames)
-			if clause := provider.BuildSearchClause(colNames, filters); clause != "" {
-				query += " WHERE " + clause
-			}
-		}
-
-		result, err := provider.ExecuteQuery(ctx, query)
-		if err != nil {
-			t.app.QueueUpdateDraw(func() {
-				t.app.ShowError(fmt.Sprintf("Count failed: %v", err))
-			})
-			return
-		}
-
-		count := "?"
-		if result != nil && len(result.Rows) > 0 && len(result.Rows[0]) > 0 {
-			count = result.Rows[0][0]
-		}
-
-		t.app.QueueUpdateDraw(func() {
+	async.NewLoader[string]().
+		WithTimeout(30 * time.Second).
+		OnSuccess(func(count string) {
 			t.app.ShowInfo(fmt.Sprintf("Total rows: %s", count))
+		}).
+		OnError(func(err error) {
+			t.app.ShowError(fmt.Sprintf("Count failed: %v", err))
+		}).
+		Run(func(ctx context.Context) (string, error) {
+			tableName := provider.QuoteIdentifier(t.table)
+			if t.schema != "" {
+				caps := provider.Capabilities()
+				if caps.HasSchemas {
+					tableName = provider.QuoteIdentifier(t.schema) + "." + tableName
+				}
+			}
+
+			query := fmt.Sprintf("SELECT COUNT(*) FROM %s", tableName)
+			if t.searchActive && t.searchFilter != "" {
+				var colNames []string
+				for _, c := range t.columns {
+					colNames = append(colNames, c.Name)
+				}
+				filters := engine.ParseSearchInput(t.searchFilter, colNames)
+				if clause := provider.BuildSearchClause(colNames, filters); clause != "" {
+					query += " WHERE " + clause
+				}
+			}
+
+			result, err := provider.ExecuteQuery(ctx, query)
+			if err != nil {
+				return "", err
+			}
+
+			count := "?"
+			if result != nil && len(result.Rows) > 0 && len(result.Rows[0]) > 0 {
+				count = result.Rows[0][0]
+			}
+			return count, nil
 		})
-	}()
 }
 
 func (t *TableData) showSchemaOverlay() {
@@ -1673,7 +1663,7 @@ func (t *TableData) showSchemaOverlay() {
 		buf.WriteString(fmt.Sprintf("  [::b]%s[::-]  %s%s\n", col.Name, col.DataType, tags))
 	}
 
-	tv := tview.NewTextView()
+	tv := core.NewTextView()
 	tv.SetDynamicColors(true)
 	tv.SetWordWrap(true)
 	tv.SetText(buf.String())
@@ -1695,45 +1685,36 @@ func (t *TableData) showSchemaOverlay() {
 // --- Phase 5: Bookmarks ---
 
 func (t *TableData) saveBookmark() {
-	form := tview.NewForm()
-	theme.Register(form)
-
 	defaultName := t.table
 	if t.schema != "" {
 		defaultName = t.schema + "." + t.table
 	}
 
-	form.AddInputField("Bookmark name", defaultName, 40, nil, nil)
-	form.AddButton("Save", func() {
-		name := form.GetFormItem(0).(*tview.InputField).GetText()
-		if name == "" {
-			t.app.ShowWarning("Name cannot be empty")
-			return
-		}
-		added := t.app.Config().AddBookmark(config.Bookmark{
-			Type:   "table",
-			Name:   t.table,
-			Schema: t.schema,
-		})
-		if added {
-			go t.app.Config().Save()
-			t.app.ShowSuccess(fmt.Sprintf("Bookmarked: %s", name))
-		} else {
-			t.app.ShowInfo("Bookmark already exists")
-		}
-		t.app.app.Pages().Pop()
-	})
-	form.AddButton("Cancel", func() {
-		t.app.app.Pages().Pop()
-	})
-
-	form.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
-		if event.Key() == tcell.KeyEscape {
+	form := components.NewFormBuilder().
+		Text("name", "Bookmark name").Value(defaultName).Done().
+		OnSubmit(func(values map[string]any) {
+			name, _ := values["name"].(string)
+			if name == "" {
+				t.app.ShowWarning("Name cannot be empty")
+				return
+			}
+			added := t.app.Config().AddBookmark(config.Bookmark{
+				Type:   "table",
+				Name:   t.table,
+				Schema: t.schema,
+			})
+			if added {
+				go t.app.Config().Save()
+				t.app.ShowSuccess(fmt.Sprintf("Bookmarked: %s", name))
+			} else {
+				t.app.ShowInfo("Bookmark already exists")
+			}
 			t.app.app.Pages().Pop()
-			return nil
-		}
-		return event
-	})
+		}).
+		OnCancel(func() {
+			t.app.app.Pages().Pop()
+		}).
+		Build()
 
 	modal := components.NewModal(components.ModalConfig{
 		Title:    "Save Bookmark",
@@ -1758,7 +1739,7 @@ func (t *TableData) rebuildLayout(showEmpty bool) {
 
 	if t.detailVisible {
 		// Outer flex is columns: [gridFlex | detailPanel]
-		t.SetDirection(tview.FlexColumn)
+		t.SetDirection(core.Row)
 
 		if showEmpty {
 			t.gridFlex.AddItem(t.emptyState, 0, 1, true)
@@ -1771,7 +1752,7 @@ func (t *TableData) rebuildLayout(showEmpty bool) {
 		t.AddItem(t.detailPanel, 0, 2, false)
 	} else {
 		// Outer flex is rows: [grid, statusBar] (original layout)
-		t.SetDirection(tview.FlexRow)
+		t.SetDirection(core.Column)
 
 		if showEmpty {
 			t.AddItem(t.emptyState, 0, 1, true)
@@ -1789,9 +1770,6 @@ func (t *TableData) toggleDetailPanel() {
 	}
 	showEmpty := t.source.RowCount() == 0
 	t.rebuildLayout(showEmpty)
-	if !showEmpty {
-		t.app.app.SetFocus(t.grid)
-	}
 }
 
 func (t *TableData) updateDetailPanel() {
@@ -1824,7 +1802,7 @@ func (t *TableData) updateDetailPanel() {
 	}
 	buf.WriteString("\n}")
 	t.detailText.SetText(buf.String())
-	t.detailText.ScrollToBeginning()
+	t.detailText.ScrollTo(0, 0)
 }
 
 // formatDetailValue writes a syntax-highlighted value to buf. If the string is

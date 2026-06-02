@@ -6,11 +6,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/atterpac/jig/components"
-	"github.com/atterpac/jig/nav"
-	"github.com/atterpac/jig/theme"
+	"github.com/atterpac/dado/components"
+	"github.com/atterpac/dado/core"
+	"github.com/atterpac/dado/nav"
 	"github.com/gdamore/tcell/v2"
-	"github.com/rivo/tview"
 
 	"github.com/atterpac/qry/internal/engine"
 )
@@ -22,7 +21,7 @@ type SchemaDiff struct {
 	sourceProfile string
 	targetProfile string
 	schema        string
-	tableList     *tview.Table
+	tableList     *core.Table
 	diffViewer    *components.DiffViewer
 	diffResult    *engine.SchemaDiffResult
 }
@@ -35,13 +34,12 @@ func NewSchemaDiff(app *App, targetProfile, schema string) *SchemaDiff {
 		schema:        schema,
 	}
 
-	s.tableList = tview.NewTable()
+	s.tableList = core.NewTable()
 	s.tableList.SetSelectable(true, false)
 	s.tableList.SetFixed(1, 0)
 	s.tableList.SetSelectedStyle(tcell.StyleDefault.
 		Foreground(tcell.ColorWhite).
 		Background(tcell.ColorDarkCyan))
-	theme.Register(s.tableList)
 
 	s.diffViewer = components.NewDiffViewer().
 		SetShowLineNumbers(true).
@@ -86,6 +84,11 @@ func (s *SchemaDiff) Hints() []components.KeyHint {
 		{Key: "Tab", Description: "Switch pane"},
 		{Key: "q/Esc", Description: "Back"},
 	}
+}
+
+// HandleKey routes keyboard events to the table list. Returns true if consumed.
+func (s *SchemaDiff) HandleKey(ev *tcell.EventKey) bool {
+	return s.tableList.HandleKey(ev)
 }
 
 func (s *SchemaDiff) loadDiff() {
@@ -223,9 +226,9 @@ func (s *SchemaDiff) renderTableList() {
 	s.tableList.Clear()
 
 	// Header
-	s.tableList.SetCell(0, 0, tview.NewTableCell(" Status ").SetSelectable(false).SetTextColor(tcell.ColorYellow))
-	s.tableList.SetCell(0, 1, tview.NewTableCell(" Table ").SetSelectable(false).SetTextColor(tcell.ColorYellow))
-	s.tableList.SetCell(0, 2, tview.NewTableCell(" Changes ").SetSelectable(false).SetTextColor(tcell.ColorYellow))
+	s.tableList.SetCell(0, 0, core.NewTableCell(" Status ").SetSelectable(false).SetTextColor(tcell.ColorYellow))
+	s.tableList.SetCell(0, 1, core.NewTableCell(" Table ").SetSelectable(false).SetTextColor(tcell.ColorYellow))
+	s.tableList.SetCell(0, 2, core.NewTableCell(" Changes ").SetSelectable(false).SetTextColor(tcell.ColorYellow))
 
 	if s.diffResult == nil {
 		return
@@ -248,9 +251,9 @@ func (s *SchemaDiff) renderTableList() {
 			statusColor = tcell.ColorYellow
 		}
 
-		s.tableList.SetCell(row, 0, tview.NewTableCell(statusIcon).SetTextColor(statusColor))
-		s.tableList.SetCell(row, 1, tview.NewTableCell(td.Name).SetTextColor(statusColor))
-		s.tableList.SetCell(row, 2, tview.NewTableCell(fmt.Sprintf("%d", len(td.ColumnDiffs))).SetTextColor(statusColor))
+		s.tableList.SetCell(row, 0, core.NewTableCell(statusIcon).SetTextColor(statusColor))
+		s.tableList.SetCell(row, 1, core.NewTableCell(td.Name).SetTextColor(statusColor))
+		s.tableList.SetCell(row, 2, core.NewTableCell(fmt.Sprintf("%d", len(td.ColumnDiffs))).SetTextColor(statusColor))
 	}
 }
 

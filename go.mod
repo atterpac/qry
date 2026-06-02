@@ -1,13 +1,12 @@
 module github.com/atterpac/qry
 
-go 1.24.0
+go 1.25.0
 
 require (
-	github.com/atterpac/jig v0.1.5
+	github.com/atterpac/dado v0.1.5
 	github.com/gdamore/tcell/v2 v2.13.4
 	github.com/go-sql-driver/mysql v1.9.3
 	github.com/jackc/pgx/v5 v5.8.0
-	github.com/rivo/tview v0.42.0
 	github.com/surrealdb/surrealdb.go v1.3.0
 	go.lsp.dev/jsonrpc2 v0.10.0
 	go.lsp.dev/protocol v0.12.0
@@ -40,13 +39,13 @@ require (
 	go.uber.org/multierr v1.8.0 // indirect
 	go.uber.org/zap v1.21.0 // indirect
 	golang.org/x/exp v0.0.0-20250408133849-7e4ce0ab07d0 // indirect
-	golang.org/x/sync v0.18.0 // indirect
+	golang.org/x/sync v0.20.0 // indirect
 	golang.org/x/sys v0.38.0 // indirect
 	golang.org/x/term v0.37.0 // indirect
-	golang.org/x/text v0.31.0 // indirect
+	golang.org/x/text v0.37.0 // indirect
 	modernc.org/libc v1.65.7 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.11.0 // indirect
 )
 
-replace github.com/atterpac/jig => ../jig
+replace github.com/atterpac/dado => ../dado

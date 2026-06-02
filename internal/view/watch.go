@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/atterpac/jig/theme"
+	"github.com/atterpac/dado/theme"
 )
 
 // WatchState holds the state for live watch mode.
@@ -21,8 +21,8 @@ type WatchState struct {
 
 // DiffResult represents the diff between two result sets.
 type DiffResult struct {
-	AddedRows   []int            // row indices in new data that are new
-	RemovedRows []int            // row indices in old data that were removed
+	AddedRows    []int           // row indices in new data that are new
+	RemovedRows  []int           // row indices in old data that were removed
 	ChangedCells map[[2]int]bool // [row, col] → changed
 }
 
