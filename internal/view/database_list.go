@@ -17,7 +17,7 @@ import (
 type DatabaseList struct {
 	*components.MasterDetailView
 	app         *App
-	dbTable     *core.Table
+	dbTable     *components.Table
 	detail      *core.TextView
 	databases   []string
 	filtered    []string
@@ -27,15 +27,13 @@ type DatabaseList struct {
 func NewDatabaseList(app *App) *DatabaseList {
 	d := &DatabaseList{
 		app:     app,
-		dbTable: core.NewTable(),
+		dbTable: components.NewTable(),
 		detail:  core.NewTextView(),
 	}
 
+	// components.Table tracks theme.Bg()/theme.SelectionStyle() at draw time.
 	d.dbTable.SetSelectable(true, false)
 	d.dbTable.SetFixed(1, 0)
-	d.dbTable.SetSelectedStyle(tcell.StyleDefault.
-		Foreground(tcell.ColorWhite).
-		Background(tcell.ColorDarkCyan))
 
 	d.detail.SetDynamicColors(true)
 

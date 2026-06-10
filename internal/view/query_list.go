@@ -17,7 +17,7 @@ import (
 type QueryList struct {
 	*components.MasterDetailView
 	app         *App
-	queryTable  *core.Table
+	queryTable  *components.Table
 	preview     *core.TextView
 	queries     []config.SavedQuery
 	filtered    []config.SavedQuery
@@ -27,15 +27,13 @@ type QueryList struct {
 func NewQueryList(app *App) *QueryList {
 	q := &QueryList{
 		app:        app,
-		queryTable: core.NewTable(),
+		queryTable: components.NewTable(),
 		preview:    core.NewTextView(),
 	}
 
+	// components.Table tracks theme.Bg()/theme.SelectionStyle() at draw time.
 	q.queryTable.SetSelectable(true, false)
 	q.queryTable.SetFixed(1, 0)
-	q.queryTable.SetSelectedStyle(tcell.StyleDefault.
-		Foreground(tcell.ColorWhite).
-		Background(tcell.ColorDarkCyan))
 
 	q.preview.SetDynamicColors(true)
 	q.preview.SetWordWrap(true)

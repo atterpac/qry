@@ -17,8 +17,8 @@ type ColumnDiff struct {
 
 // TableDiff represents the diff for a single table.
 type TableDiff struct {
-	Name       string
-	Status     string // "added", "removed", "modified"
+	Name        string
+	Status      string // "added", "removed", "modified"
 	ColumnDiffs []ColumnDiff
 }
 

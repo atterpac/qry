@@ -125,7 +125,7 @@ func (e *ExplainView) loadPlan() {
 			e.showRawFallback(fmt.Sprintf("Error: %v", err))
 		}).
 		Run(func(ctx context.Context) (*engine.PlanResult, error) {
-			return engine.ExplainQuery(ctx, provider, e.sql)
+			return provider.ExplainPlan(ctx, e.sql)
 		})
 }
 

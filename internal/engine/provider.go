@@ -9,13 +9,13 @@ import (
 
 // EngineCapabilities describes what a database engine supports.
 type EngineCapabilities struct {
-	HasSchemas       bool
-	HasDatabases     bool
-	HasNamespaces    bool
-	HasRecordLinks   bool
-	HasGraphQueries  bool
+	HasSchemas        bool
+	HasDatabases      bool
+	HasNamespaces     bool
+	HasRecordLinks    bool
+	HasGraphQueries   bool
 	SupportsReturning bool
-	IdentifierQuote  string
+	IdentifierQuote   string
 }
 
 // TableInfo describes a database table.
@@ -87,6 +87,9 @@ type Provider interface {
 	// Query execution
 	ExecuteQuery(ctx context.Context, query string) (*QueryResult, error)
 	ExecuteArgs(ctx context.Context, query string, args []any) (*QueryResult, error)
+
+	// ExplainPlan runs the engine's EXPLAIN variant and returns a parsed plan.
+	ExplainPlan(ctx context.Context, sql string) (*PlanResult, error)
 
 	// Search clause generation
 	BuildSearchClause(columns []string, filters []SearchFilter) string

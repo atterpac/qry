@@ -114,11 +114,11 @@ func (p *SQLiteProvider) ServerVersion(ctx context.Context) (string, error) {
 
 func (p *SQLiteProvider) Capabilities() EngineCapabilities {
 	return EngineCapabilities{
-		HasSchemas:       false,
-		HasDatabases:     false,
-		HasNamespaces:    false,
+		HasSchemas:        false,
+		HasDatabases:      false,
+		HasNamespaces:     false,
 		SupportsReturning: true,
-		IdentifierQuote:  `"`,
+		IdentifierQuote:   `"`,
 	}
 }
 
@@ -431,8 +431,8 @@ func (p *SQLiteProvider) GetForeignKeys(ctx context.Context, _, table string) ([
 			return nil, err
 		}
 		fks = append(fks, ForeignKeyInfo{
-			Column:          from,
-			ReferencedTable: refTable,
+			Column:           from,
+			ReferencedTable:  refTable,
 			ReferencedColumn: to,
 		})
 	}
@@ -518,4 +518,9 @@ type duration time.Duration
 
 func (d duration) String() string {
 	return time.Duration(d).String()
+}
+
+// ExplainPlan implements Provider.
+func (p *SQLiteProvider) ExplainPlan(ctx context.Context, sql string) (*PlanResult, error) {
+	return explainSQLite(ctx, p, strings.TrimSpace(sql))
 }
