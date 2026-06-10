@@ -254,9 +254,9 @@ func (e *ExplainView) updateDetail(pn *engine.PlanNode) {
 	if pn.ActualRows > 0 && pn.PlanRows > 0 {
 		ratio := float64(pn.ActualRows) / float64(pn.PlanRows)
 		if ratio > 10 {
-			fmt.Fprintf(&b, "\n[red]⚠ Bad estimate: actual/planned = %.1fx[-]\n", ratio)
+			fmt.Fprintf(&b, "\n[%s]⚠ Bad estimate: actual/planned = %.1fx[-]\n", theme.TagError(), ratio)
 		} else if ratio < 0.1 {
-			fmt.Fprintf(&b, "\n[yellow]⚠ Overestimate: actual/planned = %.2fx[-]\n", ratio)
+			fmt.Fprintf(&b, "\n[%s]⚠ Overestimate: actual/planned = %.2fx[-]\n", theme.TagWarning(), ratio)
 		}
 	}
 

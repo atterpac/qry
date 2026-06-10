@@ -283,7 +283,7 @@ func (s *SchemaExplorer) onSelectionChanged(row int) {
 		columns, err := provider.DescribeTable(ctx, table.Schema, table.Name)
 		if err != nil {
 			s.app.QueueUpdateDraw(func() {
-				s.detailView.SetText(fmt.Sprintf("[red]Error: %v[-]", err))
+				s.detailView.SetText(fmt.Sprintf("[%s]Error: %v[-]", theme.TagError(), err))
 			})
 			return
 		}
@@ -306,11 +306,11 @@ func (s *SchemaExplorer) renderColumns(table engine.TableInfo, columns []engine.
 	for _, col := range columns {
 		pkTag := ""
 		if col.IsPrimaryKey {
-			pkTag = " [yellow]PK[-]"
+			pkTag = fmt.Sprintf(" [%s]PK[-]", theme.TagWarning())
 		}
 		nullTag := ""
 		if !col.Nullable {
-			nullTag = " [red]NOT NULL[-]"
+			nullTag = fmt.Sprintf(" [%s]NOT NULL[-]", theme.TagError())
 		}
 		defaultTag := ""
 		if col.Default != "" {

@@ -235,9 +235,9 @@ func (q *QueryHistory) onSelectionChanged(row int) {
 		entry.Duration.Truncate(time.Millisecond))
 
 	if entry.Error != "" {
-		text += fmt.Sprintf("[red]Error: %s[-]\n", entry.Error)
+		text += fmt.Sprintf("[%s]Error: %s[-]\n", theme.TagError(), entry.Error)
 	} else {
-		text += fmt.Sprintf("[green]%d rows[-]\n", entry.RowCount)
+		text += fmt.Sprintf("[%s]%d rows[-]\n", theme.TagSuccess(), entry.RowCount)
 	}
 
 	text += fmt.Sprintf("\n%s", entry.Query)

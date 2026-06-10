@@ -281,7 +281,7 @@ func (q *QueryEditor) executeQuery() {
 	}
 
 	q.lastSQL = sql
-	q.statusBar.SetText(" [yellow]Executing...[-]")
+	q.statusBar.SetText(fmt.Sprintf(" [%s]Executing...[-]", theme.TagWarning()))
 
 	async.NewLoader[*engine.QueryResult]().
 		WithTimeout(60 * time.Second).
@@ -292,25 +292,25 @@ func (q *QueryEditor) executeQuery() {
 
 			if result.Message != "" {
 				q.showEmptyState("󰄬", "Query Executed", result.Message)
-				q.statusBar.SetText(fmt.Sprintf(" [green]%s[-] [%s](%s)[-]",
-					result.Message, theme.TagFgDim(), result.Duration))
+				q.statusBar.SetText(fmt.Sprintf(" [%s]%s[-] [%s](%s)[-]",
+					theme.TagSuccess(), result.Message, theme.TagFgDim(), result.Duration))
 			} else if len(result.Columns) > 0 {
 				q.showGrid()
 				q.source.SetSliceData(result.Columns, result.Rows)
 				if result.RowCount == 0 {
 					q.showEmptyState("󰍉", "No Rows", "Query returned no results")
 				}
-				q.statusBar.SetText(fmt.Sprintf(" [green]%d rows[-] [%s](%s)[-]",
-					result.RowCount, theme.TagFgDim(), result.Duration))
+				q.statusBar.SetText(fmt.Sprintf(" [%s]%d rows[-] [%s](%s)[-]",
+					theme.TagSuccess(), result.RowCount, theme.TagFgDim(), result.Duration))
 			} else {
 				q.showEmptyState("󰄬", "OK", "Query completed successfully")
-				q.statusBar.SetText(fmt.Sprintf(" [green]OK[-] [%s](%s)[-]",
-					theme.TagFgDim(), result.Duration))
+				q.statusBar.SetText(fmt.Sprintf(" [%s]OK[-] [%s](%s)[-]",
+					theme.TagSuccess(), theme.TagFgDim(), result.Duration))
 			}
 			q.setEditorFocus(false)
 		}).
 		OnError(func(err error) {
-			q.statusBar.SetText(fmt.Sprintf(" [red]Error: %v[-]", err))
+			q.statusBar.SetText(fmt.Sprintf(" [%s]Error: %v[-]", theme.TagError(), err))
 			q.app.ShowError(fmt.Sprintf("Query error: %v", err))
 		}).
 		Run(func(ctx context.Context) (*engine.QueryResult, error) {

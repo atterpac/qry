@@ -343,7 +343,7 @@ func (t *TableData) updateStatusBar() {
 		page := t.offset/t.limit + 1
 		filterInfo := ""
 		if t.searchActive {
-			filterInfo = fmt.Sprintf(" · [yellow]filter: %s[-]", t.searchFilter)
+			filterInfo = fmt.Sprintf(" · [%s]filter: %s[-]", theme.TagWarning(), t.searchFilter)
 		}
 		sortInfo := ""
 		if t.sortColumn != "" {
@@ -364,8 +364,8 @@ func (t *TableData) updateStatusBar() {
 	if deleteCount > 0 {
 		parts = append(parts, fmt.Sprintf("%d delete(s)", deleteCount))
 	}
-	t.statusBar.SetText(fmt.Sprintf(" [yellow]%s[-] · [%s]Ctrl+S to submit[-]",
-		strings.Join(parts, " · "), theme.TagFgDim()))
+	t.statusBar.SetText(fmt.Sprintf(" [%s]%s[-] · [%s]Ctrl+S to submit[-]",
+		theme.TagWarning(), strings.Join(parts, " · "), theme.TagFgDim()))
 }
 
 func (t *TableData) loadData() {

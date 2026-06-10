@@ -47,10 +47,10 @@ func (t *TableData) showSchemaOverlay() {
 	for _, col := range t.columns {
 		tags := ""
 		if col.IsPrimaryKey {
-			tags += " [yellow]PK[-]"
+			tags += fmt.Sprintf(" [%s]PK[-]", theme.TagWarning())
 		}
 		if !col.Nullable {
-			tags += " [red]NOT NULL[-]"
+			tags += fmt.Sprintf(" [%s]NOT NULL[-]", theme.TagError())
 		}
 		if col.Default != "" {
 			tags += fmt.Sprintf(" [%s]DEFAULT %s[-]", theme.TagFgDim(), col.Default)
