@@ -55,7 +55,7 @@ func (c *ConnectionInfo) Hints() []components.KeyHint {
 func (c *ConnectionInfo) loadInfo() {
 	provider := c.app.Provider()
 	if provider == nil {
-		c.SetText("[red]Not connected[-]")
+		c.SetText(fmt.Sprintf("[%s]Not connected[-]", theme.TagError()))
 		return
 	}
 
@@ -79,13 +79,13 @@ func (c *ConnectionInfo) loadInfo() {
 			if vErr == nil {
 				fmt.Fprintf(&b, "[::b]Version[::-]      %s\n", version)
 			} else {
-				fmt.Fprintf(&b, "[::b]Version[::-]      [red]error: %v[-]\n", vErr)
+				fmt.Fprintf(&b, "[::b]Version[::-]      [%s]error: %v[-]\n", theme.TagError(), vErr)
 			}
 
 			if pErr == nil {
-				fmt.Fprintf(&b, "[::b]Status[::-]       [green]Connected[-]\n")
+				fmt.Fprintf(&b, "[::b]Status[::-]       [%s]Connected[-]\n", theme.TagSuccess())
 			} else {
-				fmt.Fprintf(&b, "[::b]Status[::-]       [red]Disconnected: %v[-]\n", pErr)
+				fmt.Fprintf(&b, "[::b]Status[::-]       [%s]Disconnected: %v[-]\n", theme.TagError(), pErr)
 			}
 
 			// Connection details
@@ -121,7 +121,7 @@ func (c *ConnectionInfo) loadInfo() {
 			c.SetText(b.String())
 		}).
 		OnError(func(err error) {
-			c.SetText(fmt.Sprintf("[red]error: %v[-]", err))
+			c.SetText(fmt.Sprintf("[%s]error: %v[-]", theme.TagError(), err))
 		}).
 		Run(func(ctx context.Context) (connInfo, error) {
 			version, vErr := provider.ServerVersion(ctx)
@@ -133,9 +133,9 @@ func (c *ConnectionInfo) loadInfo() {
 
 func boolTag(v bool) string {
 	if v {
-		return "[green]yes[-]"
+		return fmt.Sprintf("[%s]yes[-]", theme.TagSuccess())
 	}
-	return "[red]no[-]"
+	return fmt.Sprintf("[%s]no[-]", theme.TagError())
 }
 
 var _ nav.Component = (*ConnectionInfo)(nil)

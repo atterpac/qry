@@ -29,3 +29,15 @@ profiles:
     saved_queries:
       - name: "orders summary by status"
         query: "SELECT status, COUNT(*) AS cnt, ROUND(SUM(total),2) AS total FROM orders GROUP BY status ORDER BY cnt DESC"
+
+  test-surreal:
+    engine: surrealdb
+    url: "ws://localhost:18000/rpc"
+    namespace: qrytest
+    database: qrytest
+    auth:
+      username: root
+      password: root
+    saved_queries:
+      - name: "orders with user (record link)"
+        query: "SELECT status, total, user.username AS username FROM orders ORDER BY total DESC"

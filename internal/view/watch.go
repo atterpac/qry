@@ -203,19 +203,21 @@ func (q *QueryEditor) executeWatchQuery(ctx context.Context) {
 	}
 
 	if diff != nil {
-		// Color added rows green
+		// Color added rows with the success accent
+		addedTag := theme.TagSuccess()
 		for _, r := range diff.AddedRows {
 			if r < len(displayRows) {
 				for c := range displayRows[r] {
-					displayRows[r][c] = "[green]" + displayRows[r][c] + "[-]"
+					displayRows[r][c] = "[" + addedTag + "]" + displayRows[r][c] + "[-]"
 				}
 			}
 		}
-		// Color changed cells yellow
+		// Color changed cells with the warning accent
+		changedTag := theme.TagWarning()
 		for pos := range diff.ChangedCells {
 			r, c := pos[0], pos[1]
 			if r < len(displayRows) && c < len(displayRows[r]) {
-				displayRows[r][c] = "[yellow]" + displayRows[r][c] + "[-]"
+				displayRows[r][c] = "[" + changedTag + "]" + displayRows[r][c] + "[-]"
 			}
 		}
 	}
@@ -231,8 +233,8 @@ func (q *QueryEditor) executeWatchQuery(ctx context.Context) {
 		if diff != nil {
 			changes = len(diff.ChangedCells) + len(diff.AddedRows) + len(diff.RemovedRows)
 		}
-		q.statusBar.SetText(fmt.Sprintf(" [green]%d rows[-] [yellow]%d changes[-] [%s](watching)[-]",
-			len(rows), changes, theme.TagFgDim()))
+		q.statusBar.SetText(fmt.Sprintf(" [%s]%d rows[-] [%s]%d changes[-] [%s](watching)[-]",
+			theme.TagSuccess(), len(rows), theme.TagWarning(), changes, theme.TagFgDim()))
 	})
 }
 

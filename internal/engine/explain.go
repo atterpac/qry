@@ -6,8 +6,6 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
-
-	"github.com/atterpac/qry/internal/config"
 )
 
 // PlanNode represents a node in a query execution plan.
@@ -28,22 +26,6 @@ type PlanNode struct {
 type PlanResult struct {
 	Root    *PlanNode
 	RawText string // fallback raw EXPLAIN output
-}
-
-// ExplainQuery runs EXPLAIN on the given SQL and returns a parsed plan.
-func ExplainQuery(ctx context.Context, provider Provider, sql string) (*PlanResult, error) {
-	sql = strings.TrimSpace(sql)
-
-	switch provider.EngineType() {
-	case config.EnginePostgres:
-		return explainPostgres(ctx, provider, sql)
-	case config.EngineMySQL:
-		return explainMySQL(ctx, provider, sql)
-	case config.EngineSQLite:
-		return explainSQLite(ctx, provider, sql)
-	default:
-		return explainFallback(ctx, provider, sql)
-	}
 }
 
 // isSelectLike returns true if the query is safe for EXPLAIN ANALYZE.

@@ -41,6 +41,9 @@ func (m *mockProvider) ExecuteQuery(ctx context.Context, query string) (*engine.
 func (m *mockProvider) ExecuteArgs(ctx context.Context, query string, args []any) (*engine.QueryResult, error) {
 	return nil, nil
 }
+func (m *mockProvider) ExplainPlan(ctx context.Context, sql string) (*engine.PlanResult, error) {
+	return nil, nil
+}
 func (m *mockProvider) BuildSearchClause(columns []string, filters []engine.SearchFilter) string {
 	return ""
 }

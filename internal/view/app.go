@@ -20,6 +20,7 @@ import (
 	"github.com/atterpac/dado/validators"
 	"github.com/gdamore/tcell/v2"
 
+	"github.com/atterpac/qry/internal/command"
 	"github.com/atterpac/qry/internal/config"
 	"github.com/atterpac/qry/internal/engine"
 )
@@ -69,6 +70,9 @@ type App struct {
 
 	// Global key actions (single source of truth for dispatch + help).
 	actions *input.ActionRegistry
+
+	// Command-bar registry (built lazily on first use).
+	commands *command.Table
 }
 
 // NewApp creates the application with a database provider.
@@ -605,256 +609,18 @@ func (a *App) showCommandBar() {
 }
 
 func (a *App) handleCommand(text string) {
-	text = strings.TrimSpace(text)
-	if text == "" {
+	if a.commands == nil {
+		a.commands = a.buildCommandTable()
+	}
+	cmd, name, args, found := a.commands.Dispatch(text)
+	if name == "" {
 		return
 	}
-
-	parts := strings.Fields(text)
-	cmd := parts[0]
-	args := parts[1:]
-
-	switch cmd {
-	case "tables", "schema":
-		a.NavigateToSchemaExplorer()
-	case "editor", "e":
-		if len(args) > 0 {
-			a.NavigateToQueryEditorWithSQL(strings.Join(args, " "))
-		} else {
-			a.NavigateToQueryEditor()
-		}
-	case "info":
-		a.NavigateToConnectionInfo()
-	case "databases", "db":
-		a.NavigateToDatabaseList()
-	case "queries":
-		a.NavigateToQueryList()
-	case "history":
-		a.NavigateToQueryHistory()
-	case "run":
-		if len(args) > 0 {
-			sql := strings.Join(args, " ")
-			a.NavigateToQueryEditorWithSQL(sql)
-		}
-	case "table":
-		if len(args) > 0 {
-			a.NavigateToTableData("", args[0])
-		}
-	case "erd":
-		schema := "public"
-		if len(args) > 0 {
-			schema = args[0]
-		}
-		a.NavigateToERD(schema)
-	case "profile":
-		a.showProfileSelector()
-	case "quit", "q":
-		a.app.Stop()
-	case "sort":
-		td, ok := a.currentTableData()
-		if !ok {
-			a.ShowWarning("Not viewing a table")
-			return
-		}
-		if len(args) == 0 {
-			a.ShowWarning("Usage: sort <column> [desc]")
-			return
-		}
-		col := args[0]
-		// Validate column exists
-		found := false
-		for _, rc := range td.resultCols {
-			if strings.EqualFold(rc, col) {
-				col = rc // use exact case
-				found = true
-				break
-			}
-		}
-		if !found {
-			a.ShowWarning(fmt.Sprintf("Column %q not found", col))
-			return
-		}
-		dir := "ASC"
-		if len(args) > 1 && strings.EqualFold(args[1], "desc") {
-			dir = "DESC"
-		}
-		td.SetSort(col, dir)
-
-	case "count":
-		td, ok := a.currentTableData()
-		if !ok {
-			a.ShowWarning("Not viewing a table")
-			return
-		}
-		td.runCount()
-
-	case "describe", "desc":
-		td, ok := a.currentTableData()
-		if !ok {
-			a.ShowWarning("Not viewing a table")
-			return
-		}
-		td.showSchemaOverlay()
-
-	case "begin":
-		tp, ok := a.Provider().(engine.TransactionalProvider)
-		if !ok {
-			a.ShowWarning("Current engine does not support transactions")
-			return
-		}
-		if tp.InTransaction() {
-			a.ShowWarning("Transaction already active")
-			return
-		}
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		if err := tp.BeginTx(ctx); err != nil {
-			a.ShowError(fmt.Sprintf("Begin failed: %v", err))
-			return
-		}
-		a.txMode = true
-		a.updateTxStatus()
-		a.ShowSuccess("Transaction started")
-
-	case "commit":
-		tp, ok := a.Provider().(engine.TransactionalProvider)
-		if !ok || !tp.InTransaction() {
-			a.ShowWarning("No active transaction")
-			return
-		}
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		if err := tp.CommitTx(ctx); err != nil {
-			a.ShowError(fmt.Sprintf("Commit failed: %v", err))
-			return
-		}
-		a.txMode = false
-		a.updateTxStatus()
-		a.ShowSuccess("Transaction committed")
-		if td, ok := a.currentTableData(); ok {
-			td.discardChanges()
-		}
-
-	case "rollback":
-		tp, ok := a.Provider().(engine.TransactionalProvider)
-		if !ok || !tp.InTransaction() {
-			a.ShowWarning("No active transaction (use :discard to clear pending edits)")
-			return
-		}
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		if err := tp.RollbackTx(ctx); err != nil {
-			a.ShowError(fmt.Sprintf("Rollback failed: %v", err))
-			return
-		}
-		a.txMode = false
-		a.updateTxStatus()
-		a.ShowSuccess("Transaction rolled back")
-		if td, ok := a.currentTableData(); ok {
-			td.discardChanges()
-		}
-
-	case "discard":
-		td, ok := a.currentTableData()
-		if !ok {
-			a.ShowWarning("Not viewing a table")
-			return
-		}
-		td.discardChanges()
-
-	case "dry-run":
-		a.ShowInfo("Dry-run: wrapping pending changes in BEGIN/ROLLBACK")
-		td, ok := a.currentTableData()
-		if !ok {
-			a.ShowWarning("Not viewing a table")
-			return
-		}
-		td.dryRun()
-
-	case "diff":
-		if len(args) < 2 {
-			a.ShowWarning("Usage: diff schema <profile> [schema]")
-			return
-		}
-		subCmd := args[0]
-		switch subCmd {
-		case "schema":
-			targetProfile := args[1]
-			schema := ""
-			if len(args) > 2 {
-				schema = args[2]
-			}
-			a.NavigateToSchemaDiff(targetProfile, schema)
-		default:
-			a.ShowWarning("Usage: diff schema <profile> [schema]")
-		}
-
-	case "watch":
-		if c := a.app.Pages().Current(); c != nil {
-			if qe, ok := c.(*QueryEditor); ok {
-				if len(args) > 0 && args[0] == "stop" {
-					qe.stopWatch()
-					return
-				}
-				if len(args) == 0 {
-					a.ShowWarning("Usage: watch <duration> (e.g. 5s, 1m) or watch stop")
-					return
-				}
-				dur, err := time.ParseDuration(args[0])
-				if err != nil {
-					a.ShowWarning(fmt.Sprintf("Invalid duration: %v", err))
-					return
-				}
-				qe.startWatch(dur)
-				return
-			}
-		}
-		a.ShowWarning("Watch mode is only available in the query editor")
-
-	case "explain":
-		if len(args) == 0 {
-			// Try to get SQL from current query editor
-			if c := a.app.Pages().Current(); c != nil {
-				if qe, ok := c.(*QueryEditor); ok && qe.lastSQL != "" {
-					a.NavigateToExplainView(qe.lastSQL)
-					return
-				}
-			}
-			a.ShowWarning("Usage: explain <sql>")
-			return
-		}
-		a.NavigateToExplainView(strings.Join(args, " "))
-
-	case "pipe":
-		if len(args) == 0 {
-			a.ShowWarning("Usage: pipe [--format csv|json|tsv] <shell command>")
-			return
-		}
-		format := "json"
-		shellArgs := args
-		if len(shellArgs) >= 2 && shellArgs[0] == "--format" {
-			format = shellArgs[1]
-			shellArgs = shellArgs[2:]
-		}
-		if len(shellArgs) == 0 {
-			a.ShowWarning("Usage: pipe [--format csv|json|tsv] <shell command>")
-			return
-		}
-		pv := a.currentPipeableView()
-		if pv == nil {
-			a.ShowWarning("Current view has no data to pipe")
-			return
-		}
-		data := pv.BuildPipeData(format)
-		if data == "" {
-			a.ShowWarning("No data to pipe")
-			return
-		}
-		a.executePipe(data, strings.Join(shellArgs, " "))
-
-	default:
-		a.ShowWarning(fmt.Sprintf("Unknown command: %s", cmd))
+	if !found {
+		a.ShowWarning(fmt.Sprintf("Unknown command: %s", name))
+		return
 	}
+	cmd.Run(args)
 }
 
 // currentPipeableView returns the current view if it implements PipeableView.
@@ -1010,7 +776,7 @@ func (a *App) showHelp() {
 	var b strings.Builder
 	b.WriteString("[::b]qry — Database Query Client[::-]\n")
 	for _, section := range a.helpModel().GetSections() {
-		b.WriteString("\n[::b]" + section.Name + "[::-]\n")
+		fmt.Fprintf(&b, "\n[::b]%s[::-]\n", section.Name)
 		for _, act := range section.Actions {
 			fmt.Fprintf(&b, "  %-10s %s\n", act.Key, act.Description)
 		}

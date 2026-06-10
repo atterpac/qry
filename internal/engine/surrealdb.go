@@ -432,3 +432,9 @@ func (p *SurrealDBProvider) BuildSearchClause(columns []string, filters []Search
 func (p *SurrealDBProvider) QuoteIdentifier(name string) string {
 	return "`" + strings.ReplaceAll(name, "`", "``") + "`"
 }
+
+// ExplainPlan implements Provider. SurrealDB has no SQL EXPLAIN; fall back to
+// the generic EXPLAIN passthrough.
+func (p *SurrealDBProvider) ExplainPlan(ctx context.Context, sql string) (*PlanResult, error) {
+	return explainFallback(ctx, p, strings.TrimSpace(sql))
+}

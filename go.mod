@@ -3,7 +3,7 @@ module github.com/atterpac/qry
 go 1.25.0
 
 require (
-	github.com/atterpac/dado v0.1.5
+	github.com/atterpac/dado v0.2.6
 	github.com/gdamore/tcell/v2 v2.13.4
 	github.com/go-sql-driver/mysql v1.9.3
 	github.com/jackc/pgx/v5 v5.8.0
@@ -47,5 +47,3 @@ require (
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.11.0 // indirect
 )
-
-replace github.com/atterpac/dado => ../dado

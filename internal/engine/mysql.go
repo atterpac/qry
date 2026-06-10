@@ -492,3 +492,8 @@ func (p *MySQLProvider) BuildSearchClause(columns []string, filters []SearchFilt
 func (p *MySQLProvider) QuoteIdentifier(name string) string {
 	return "`" + strings.ReplaceAll(name, "`", "``") + "`"
 }
+
+// ExplainPlan implements Provider.
+func (p *MySQLProvider) ExplainPlan(ctx context.Context, sql string) (*PlanResult, error) {
+	return explainMySQL(ctx, p, strings.TrimSpace(sql))
+}

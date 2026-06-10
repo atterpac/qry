@@ -9,13 +9,13 @@ import (
 
 // EngineCapabilities describes what a database engine supports.
 type EngineCapabilities struct {
-	HasSchemas       bool
-	HasDatabases     bool
-	HasNamespaces    bool
-	HasRecordLinks   bool
-	HasGraphQueries  bool
+	HasSchemas        bool
+	HasDatabases      bool
+	HasNamespaces     bool
+	HasRecordLinks    bool
+	HasGraphQueries   bool
 	SupportsReturning bool
-	IdentifierQuote  string
+	IdentifierQuote   string
 }
 
 // TableInfo describes a database table.
@@ -88,6 +88,16 @@ type Provider interface {
 	ExecuteQuery(ctx context.Context, query string) (*QueryResult, error)
 	ExecuteArgs(ctx context.Context, query string, args []any) (*QueryResult, error)
 
+	// ExplainPlan runs the engine's EXPLAIN variant and returns a parsed plan.
+	ExplainPlan(ctx context.Context, sql string) (*PlanResult, error)
+
+	// SQLDialect groups the engine's SQL string-generation methods.
+	SQLDialect
+}
+
+// SQLDialect groups the engine-specific SQL string generation: search clause
+// construction, DML built from a DataGrid changeset, and identifier quoting.
+type SQLDialect interface {
 	// Search clause generation
 	BuildSearchClause(columns []string, filters []SearchFilter) string
 

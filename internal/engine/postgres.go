@@ -615,3 +615,7 @@ func (p *PostgresProvider) qualifiedTable(schema, table string) string {
 	return p.QuoteIdentifier(table)
 }
 
+// ExplainPlan implements Provider.
+func (p *PostgresProvider) ExplainPlan(ctx context.Context, sql string) (*PlanResult, error) {
+	return explainPostgres(ctx, p, strings.TrimSpace(sql))
+}

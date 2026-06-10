@@ -27,6 +27,19 @@ services:
       timeout: 5s
       retries: 15
 
+  surrealdb:
+    image: surrealdb/surrealdb:latest
+    # `start` runs the server; root/root creds match the seeder + config profile.
+    command: start --user root --pass root --bind 0.0.0.0:8000 memory
+    ports:
+      - "18000:8000"
+    healthcheck:
+      # The image ships /surreal; isready confirms the RPC endpoint is live.
+      test: ["CMD", "/surreal", "isready", "--endpoint", "http://localhost:8000"]
+      interval: 2s
+      timeout: 5s
+      retries: 15
+
   mysql:
     image: mysql:8.0
     ports:

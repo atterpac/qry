@@ -19,7 +19,7 @@ import (
 type SchemaExplorer struct {
 	*components.MasterDetailView
 	app         *App
-	tableList   *core.Table
+	tableList   *components.Table
 	detailView  *core.TextView
 	tables      []engine.TableInfo
 	filtered    []engine.TableInfo
@@ -32,16 +32,15 @@ type SchemaExplorer struct {
 func NewSchemaExplorer(app *App) *SchemaExplorer {
 	s := &SchemaExplorer{
 		app:        app,
-		tableList:  core.NewTable(),
+		tableList:  components.NewTable(),
 		detailView: core.NewTextView(),
 		schema:     "public",
 	}
 
+	// components.Table re-applies theme.Bg()/theme.SelectionStyle() every draw
+	// and manages its own theme subscription, so no colors are hardcoded here.
 	s.tableList.SetSelectable(true, false)
 	s.tableList.SetFixed(1, 0)
-	s.tableList.SetSelectedStyle(tcell.StyleDefault.
-		Foreground(tcell.ColorWhite).
-		Background(tcell.ColorDarkCyan))
 
 	s.detailView.SetDynamicColors(true)
 
@@ -248,7 +247,7 @@ func (s *SchemaExplorer) renderTableList() {
 			typeIcon = "󰈔"
 		}
 		s.tableList.SetCell(i+1, 0, core.NewTableCell(t.Name).SetExpansion(1))
-		s.tableList.SetCell(i+1, 1, core.NewTableCell(typeIcon+" "+t.Type).SetTextColor(tcell.ColorGray))
+		s.tableList.SetCell(i+1, 1, core.NewTableCell(typeIcon+" "+t.Type).SetTextColor(theme.FgMuted()))
 	}
 
 	if len(s.filtered) > 0 {
@@ -284,7 +283,7 @@ func (s *SchemaExplorer) onSelectionChanged(row int) {
 		columns, err := provider.DescribeTable(ctx, table.Schema, table.Name)
 		if err != nil {
 			s.app.QueueUpdateDraw(func() {
-				s.detailView.SetText(fmt.Sprintf("[red]Error: %v[-]", err))
+				s.detailView.SetText(fmt.Sprintf("[%s]Error: %v[-]", theme.TagError(), err))
 			})
 			return
 		}
@@ -307,11 +306,11 @@ func (s *SchemaExplorer) renderColumns(table engine.TableInfo, columns []engine.
 	for _, col := range columns {
 		pkTag := ""
 		if col.IsPrimaryKey {
-			pkTag = " [yellow]PK[-]"
+			pkTag = fmt.Sprintf(" [%s]PK[-]", theme.TagWarning())
 		}
 		nullTag := ""
 		if !col.Nullable {
-			nullTag = " [red]NOT NULL[-]"
+			nullTag = fmt.Sprintf(" [%s]NOT NULL[-]", theme.TagError())
 		}
 		defaultTag := ""
 		if col.Default != "" {

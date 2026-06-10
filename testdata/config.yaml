@@ -25,3 +25,13 @@ profiles:
   sqlite:
     engine: sqlite
     path: "testdata/test.db"
+
+  # SurrealDB (in-memory container) — worked example of a non-SQL engine
+  surrealdb:
+    engine: surrealdb
+    url: "ws://localhost:18000/rpc"
+    namespace: qrytest
+    database: qrytest
+    auth:
+      username: root
+      password: root
