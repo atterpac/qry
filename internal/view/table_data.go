@@ -303,6 +303,9 @@ func (t *TableData) Start() {
 
 func (t *TableData) Stop() {
 	t.app.gridSearching = false
+	// Clear the grid edit flag in case we navigate away mid-edit; otherwise it
+	// would keep suppressing global shortcuts in the next view.
+	t.app.gridEditing = false
 }
 
 func (t *TableData) Hints() []components.KeyHint {

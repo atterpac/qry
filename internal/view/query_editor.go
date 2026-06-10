@@ -79,9 +79,9 @@ func newQueryEditor(app *App, initialSQL string) *QueryEditor {
 	q.schemaOverlay = newSchemaInfoOverlay()
 
 	q.editor.SetPlaceholder("Enter SQL query... (Ctrl+J to execute)")
-	q.editor.SetBorder(true)
-	q.editor.SetTitle("SQL")
-	q.editor.SetTitleAlign(core.AlignLeft)
+	// TextArea draws its own theme-reactive, focus-aware border in Draw();
+	// enabling the core.Box border too would paint a second, un-themed frame.
+	q.editor.SetLabel("SQL")
 	if initialSQL != "" {
 		q.editor.SetText(initialSQL, true)
 	}
@@ -244,6 +244,11 @@ func (q *QueryEditor) Stop() {
 	if q.watch != nil && q.watch.running {
 		q.stopWatch()
 	}
+	// Start() puts the editor pane in focus, which sets these flags to suppress
+	// global shortcuts. Clear them on the way out so keybinds work in the view
+	// we return to.
+	q.app.textEditing = false
+	q.app.gridEditing = false
 }
 
 // Draw renders the split view and then draws the autocomplete overlay on top.
@@ -535,7 +540,12 @@ func (q *QueryEditor) acceptSuggestion(s autocomplete.Suggestion) {
 	partialStartChar := byteOffsetToCharPos(sql, pr.PartialStart)
 	cursorChar := byteOffsetToCharPos(sql, cursorBytePos)
 
+	// Replace() mutates the text, which fires onChange and would re-open the
+	// overlay on the just-completed word. Suppress that one refresh so the popup
+	// stays closed until the user types a new trigger (space, comma, etc.).
+	q.suppressAC = true
 	q.editor.Replace(partialStartChar, cursorChar, insertText)
+	q.overlay.Hide()
 }
 
 // cursorByteOffset converts the TextArea cursor (row, col) to a byte offset in the SQL string.
@@ -572,16 +582,25 @@ func (q *QueryEditor) cursorByteOffset(sql string) int {
 	return offset
 }
 
+// Text origin offsets of the editor's TextArea relative to its inner rect.
+// The TextArea draws a label row, then its own border, then text — so the first
+// glyph sits 2 cols in (left border + pad) and 2 rows down (label + top border).
+const (
+	editorTextOriginX = 2 // left border + one space of padding
+	editorTextOriginY = 2 // "SQL" label row + top border row
+)
+
 // cursorScreenPos returns the screen coordinates of the cursor in the editor.
 func (q *QueryEditor) cursorScreenPos() (int, int) {
 	_, _, toRow, toCol := q.editor.GetCursor()
 	rowOffset, colOffset := q.editor.GetOffset()
 
-	// The editor's inner rect gives us the text area position
+	// GetInnerRect is the TextArea's content box; text is drawn inset from it by
+	// the label and self-drawn border (see editorTextOrigin* above).
 	x, y, _, _ := q.editor.GetInnerRect()
 
-	screenX := x + toCol - colOffset
-	screenY := y + toRow - rowOffset
+	screenX := x + editorTextOriginX + toCol - colOffset
+	screenY := y + editorTextOriginY + toRow - rowOffset
 
 	return screenX, screenY
 }
