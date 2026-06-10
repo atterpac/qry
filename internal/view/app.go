@@ -776,7 +776,7 @@ func (a *App) showHelp() {
 	var b strings.Builder
 	b.WriteString("[::b]qry — Database Query Client[::-]\n")
 	for _, section := range a.helpModel().GetSections() {
-		b.WriteString("\n[::b]" + section.Name + "[::-]\n")
+		fmt.Fprintf(&b, "\n[::b]%s[::-]\n", section.Name)
 		for _, act := range section.Actions {
 			fmt.Fprintf(&b, "  %-10s %s\n", act.Key, act.Description)
 		}

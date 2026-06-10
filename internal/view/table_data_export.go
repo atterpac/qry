@@ -173,9 +173,9 @@ func (t *TableData) buildExportData(format string) string {
 		var buf strings.Builder
 		w := csv.NewWriter(&buf)
 		w.Write(t.resultCols)
-		for r := 0; r < rowCount; r++ {
+		for r := range rowCount {
 			var row []string
-			for c := 0; c < colCount; c++ {
+			for c := range colCount {
 				row = append(row, t.source.Cell(r, c).Value)
 			}
 			w.Write(row)
@@ -185,9 +185,9 @@ func (t *TableData) buildExportData(format string) string {
 
 	case "json":
 		var rows []map[string]string
-		for r := 0; r < rowCount; r++ {
+		for r := range rowCount {
 			row := make(map[string]string)
-			for c := 0; c < colCount; c++ {
+			for c := range colCount {
 				row[t.resultCols[c]] = t.source.Cell(r, c).Value
 			}
 			rows = append(rows, row)
@@ -197,9 +197,9 @@ func (t *TableData) buildExportData(format string) string {
 
 	case "sql":
 		var stmts []string
-		for r := 0; r < rowCount; r++ {
+		for r := range rowCount {
 			var vals []string
-			for c := 0; c < colCount; c++ {
+			for c := range colCount {
 				v := t.source.Cell(r, c).Value
 				if strings.EqualFold(v, "NULL") || v == "" {
 					vals = append(vals, "NULL")

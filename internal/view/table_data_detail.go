@@ -42,7 +42,7 @@ func (t *TableData) showCellDetail() {
 
 func (t *TableData) showSchemaOverlay() {
 	var buf strings.Builder
-	buf.WriteString(fmt.Sprintf("[::b]Schema: %s[::-]\n\n", t.table))
+	fmt.Fprintf(&buf, "[::b]Schema: %s[::-]\n\n", t.table)
 
 	for _, col := range t.columns {
 		tags := ""
@@ -58,7 +58,7 @@ func (t *TableData) showSchemaOverlay() {
 		if col.Extra != "" {
 			tags += fmt.Sprintf(" [%s]%s[-]", theme.TagFgDim(), col.Extra)
 		}
-		buf.WriteString(fmt.Sprintf("  [::b]%s[::-]  %s%s\n", col.Name, col.DataType, tags))
+		fmt.Fprintf(&buf, "  [::b]%s[::-]  %s%s\n", col.Name, col.DataType, tags)
 	}
 
 	tv := core.NewTextView()
@@ -191,7 +191,7 @@ func (t *TableData) updateDetailPanel() {
 		}
 		first = false
 		keyJSON, _ := json.Marshal(col)
-		buf.WriteString(fmt.Sprintf("  [%s]%s[-]: ", accent, string(keyJSON)))
+		fmt.Fprintf(&buf, "  [%s]%s[-]: ", accent, string(keyJSON))
 		formatDetailValue(&buf, v, accent, "  ")
 	}
 	buf.WriteString("\n}")
@@ -366,7 +366,7 @@ func writeDetailJSON(buf *strings.Builder, v any, accent, indent string) {
 			first = false
 			keyJSON, _ := json.Marshal(k)
 			buf.WriteString(nextIndent)
-			buf.WriteString(fmt.Sprintf("[%s]%s[-]: ", accent, string(keyJSON)))
+			fmt.Fprintf(buf, "[%s]%s[-]: ", accent, string(keyJSON))
 			writeDetailJSON(buf, child, accent, nextIndent)
 		}
 		buf.WriteString("\n")

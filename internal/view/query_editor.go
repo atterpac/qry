@@ -281,7 +281,7 @@ func (q *QueryEditor) executeQuery() {
 	}
 
 	q.lastSQL = sql
-	q.statusBar.SetText(fmt.Sprintf(" [yellow]Executing...[-]"))
+	q.statusBar.SetText(" [yellow]Executing...[-]")
 
 	async.NewLoader[*engine.QueryResult]().
 		WithTimeout(60 * time.Second).

@@ -1,33 +1,8 @@
 package view
 
 import (
-	"fmt"
 	"strings"
 )
-
-// getString safely extracts a string from a map[string]any.
-func getString(values map[string]any, key string) string {
-	if v, ok := values[key]; ok {
-		if s, ok := v.(string); ok {
-			return s
-		}
-	}
-	return ""
-}
-
-// formatBytes formats a byte count into a human-readable string.
-func formatBytes(b int64) string {
-	const unit = 1024
-	if b < unit {
-		return fmt.Sprintf("%d B", b)
-	}
-	div, exp := int64(unit), 0
-	for n := b / unit; n >= unit; n /= unit {
-		div *= unit
-		exp++
-	}
-	return fmt.Sprintf("%.1f %cB", float64(b)/float64(div), "KMGTPE"[exp])
-}
 
 // redactDSN masks the password portion of a DSN for display.
 func redactDSN(dsn string) string {

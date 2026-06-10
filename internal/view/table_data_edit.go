@@ -38,13 +38,6 @@ func (t *TableData) submitChangeset(cs *components.Changeset) {
 		deletedRows[pd.RowIndex] = true
 	}
 
-	// Group edit changes by row
-	type rowChanges struct {
-		row     int
-		changes []engine.CellChange
-		pkVals  map[string]string
-	}
-
 	var previewStatements []string
 
 	// UPDATEs first
@@ -54,12 +47,12 @@ func (t *TableData) submitChangeset(cs *components.Changeset) {
 			if deletedRows[rowIdx] {
 				continue // skip updates for rows being deleted
 			}
-			rc := rowChanges{row: rowIdx, pkVals: make(map[string]string)}
+			pkVals := make(map[string]string)
 			for _, pkCol := range t.pkCols {
 				for colIdx, colName := range t.resultCols {
 					if colName == pkCol {
 						cell := t.source.Cell(rowIdx, colIdx)
-						rc.pkVals[pkCol] = cell.Value
+						pkVals[pkCol] = cell.Value
 						break
 					}
 				}
@@ -75,7 +68,7 @@ func (t *TableData) submitChangeset(cs *components.Changeset) {
 				}
 			}
 			if len(changes) > 0 {
-				sql, args, err := provider.BuildUpdate(t.schema, t.table, t.pkCols, changes, rc.pkVals)
+				sql, args, err := provider.BuildUpdate(t.schema, t.table, t.pkCols, changes, pkVals)
 				if err != nil {
 					t.app.ShowError(fmt.Sprintf("Build SQL failed: %v", err))
 					return
@@ -429,10 +422,12 @@ func (t *TableData) dryRun() {
 		tp.RollbackTx(ctx)
 
 		t.app.QueueUpdateDraw(func() {
-			summary := fmt.Sprintf("Dry-run results (%d statements, all rolled back):\n\n", len(previewStatements))
+			var sb strings.Builder
+			fmt.Fprintf(&sb, "Dry-run results (%d statements, all rolled back):\n\n", len(previewStatements))
 			for i, r := range results {
-				summary += fmt.Sprintf("%d. %s → %s\n", i+1, previewStatements[i], r)
+				fmt.Fprintf(&sb, "%d. %s → %s\n", i+1, previewStatements[i], r)
 			}
+			summary := sb.String()
 			t.app.ShowInfo("Dry-run complete — all changes rolled back")
 
 			tv := core.NewTextView()
